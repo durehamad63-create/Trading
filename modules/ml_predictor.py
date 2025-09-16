@@ -90,15 +90,26 @@ class MobileMLModel:
             self.redis_client = None
     
     def predict(self, symbol):
-        """Generate real model prediction using multi-asset support"""
+        """Generate real model prediction with Redis caching"""
         import time
         current_time = time.time()
+        cache_key = f"prediction:{symbol}"
+        
+        # Check Redis cache first
+        if self.redis_client:
+            try:
+                cached_data = self.redis_client.get(cache_key)
+                if cached_data:
+                    import json
+                    return json.loads(cached_data)
+            except Exception:
+                pass
         
         # Rate limiting per symbol
         if symbol in self.last_request_time:
             time_since_last = current_time - self.last_request_time[symbol]
             if time_since_last < self.min_request_interval:
-                # Return cached result if available
+                # Return memory cached result if available
                 if symbol in self.prediction_cache:
                     cache_time, cached_result = self.prediction_cache[symbol]
                     if current_time - cache_time < self.cache_ttl:
@@ -209,6 +220,15 @@ class MobileMLModel:
                 'predicted_range': multi_asset.format_predicted_range(symbol, predicted_price),
                 'data_source': data_source + ' + ML Analysis'
             }
+            
+            # Cache in Redis first with hot symbol priority
+            if self.redis_client:
+                try:
+                    import json
+                    ttl = 30 if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else 60
+                    self.redis_client.setex(cache_key, ttl, json.dumps(result))
+                except Exception:
+                    pass
             
             # Cache the result in memory
             self.prediction_cache[symbol] = (current_time, result)

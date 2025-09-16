@@ -1,593 +1,431 @@
-# Trading AI Platform API Documentation
+# Trading AI Platform
 
-## Overview
-This document provides comprehensive documentation for all API endpoints and WebSocket connections in the Trading AI Platform.
+A real-time financial forecasting system that provides AI-powered predictions for cryptocurrencies, stocks, and macro indicators through REST APIs and WebSocket connections.
 
-## Base URL
+## 🚀 Features
+
+- **Real-time ML Predictions** for 25+ assets (crypto, stocks, macro indicators)
+- **WebSocket Streaming** for live price updates and forecasts
+- **Historical Accuracy Tracking** with trend analysis
+- **Multi-level Caching** (Redis + Memory) for optimal performance
+- **PostgreSQL Database** with connection pooling
+- **Rate Limiting** and comprehensive error handling
+- **CSV Export** functionality for historical data
+
+## 📋 Supported Assets
+
+### Cryptocurrencies (10)
+BTC, ETH, USDT, XRP, BNB, SOL, USDC, DOGE, ADA, TRX
+
+### Stocks (10) 
+NVDA, MSFT, AAPL, GOOGL, AMZN, META, AVGO, TSLA, BRK-B, JPM
+
+### Macro Indicators (5)
+GDP, CPI, UNEMPLOYMENT, FED_RATE, CONSUMER_CONFIDENCE
+
+## 🛠️ Prerequisites
+
+- **Python 3.8+**
+- **PostgreSQL 12+**
+- **Redis 6+**
+- **Git**
+
+## 📦 Installation
+
+### 1. Clone Repository
+```bash
+git clone <your-repo-url>
+cd TradingApp
 ```
-http://localhost:8000
+
+### 2. Create Virtual Environment
+```bash
+python -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+
+# Linux/Mac
+source .venv/bin/activate
 ```
 
----
+### 3. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
 
-## REST API Endpoints
+## ⚙️ Environment Configuration
 
-### 1. Market Summary
-**GET** `/api/market/summary`
+### 1. Create .env File
+Copy the example environment file and configure it:
 
-Returns trending assets and quick forecast summary.
+```bash
+cp .env.example .env
+```
 
-**Query Parameters:**
-- `class_filter` (optional): `crypto`, `stocks`, `macro`, `all` (default: `crypto`)
-- `limit` (optional): Number of assets to return (default: `10`)
+### 2. Configure .env Variables
 
-**Response:**
-```json
+Open `.env` file and set the following variables:
+
+```env
+# Database Configuration
+DATABASE_URL=postgresql://postgres:your_password@localhost:5432/trading_db
+
+# Redis Configuration
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_DB=0
+REDIS_PREDICTION_DB=1
+REDIS_ML_DB=2
+REDIS_CHART_DB=3
+REDIS_PASSWORD=
+
+# API Keys for Stock Data (Optional but recommended)
+ALPHA_VANTAGE_API_KEY=YOUR_API_KEY_HERE
+IEX_CLOUD_TOKEN=YOUR_TOKEN_HERE
+
+# Cache Settings
+CACHE_TTL=60
+PREDICTION_CACHE_TTL=300
+
+# Rate Limiting
+RATE_LIMIT_REQUESTS=100
+RATE_LIMIT_WINDOW=60
+
+# WebSocket Settings
+WS_HEARTBEAT_INTERVAL=30
+WS_FORECAST_INTERVAL=15
+WS_TRENDS_INTERVAL=60
+```
+
+### 3. Environment Variables Explained
+
+| Variable | Description | Required | Default |
+|----------|-------------|----------|---------|
+| `DATABASE_URL` | PostgreSQL connection string | ✅ | - |
+| `REDIS_HOST` | Redis server hostname | ✅ | localhost |
+| `REDIS_PORT` | Redis server port | ✅ | 6379 |
+| `REDIS_DB` | Redis database for general cache | ✅ | 0 |
+| `REDIS_PREDICTION_DB` | Redis database for ML predictions | ✅ | 1 |
+| `REDIS_ML_DB` | Redis database for ML model cache | ✅ | 2 |
+| `REDIS_CHART_DB` | Redis database for chart data | ✅ | 3 |
+| `REDIS_PASSWORD` | Redis password (if required) | ❌ | - |
+| `ALPHA_VANTAGE_API_KEY` | Alpha Vantage API key for stocks | ❌ | - |
+| `IEX_CLOUD_TOKEN` | IEX Cloud token for stocks | ❌ | - |
+| `CACHE_TTL` | General cache TTL in seconds | ❌ | 60 |
+| `PREDICTION_CACHE_TTL` | ML prediction cache TTL | ❌ | 300 |
+
+## 🗄️ Database Setup
+
+### 1. Install PostgreSQL
+- **Windows**: Download from [postgresql.org](https://www.postgresql.org/download/)
+- **Ubuntu**: `sudo apt install postgresql postgresql-contrib`
+- **macOS**: `brew install postgresql`
+
+### 2. Create Database
+```sql
+-- Connect to PostgreSQL as superuser
+psql -U postgres
+
+-- Create database
+CREATE DATABASE trading_db;
+
+-- Create user (optional)
+CREATE USER trading_user WITH PASSWORD 'your_password';
+GRANT ALL PRIVILEGES ON DATABASE trading_db TO trading_user;
+
+-- Exit
+\q
+```
+
+### 3. Update DATABASE_URL
+```env
+# If using default postgres user
+DATABASE_URL=postgresql://postgres:your_password@localhost:5432/trading_db
+
+# If using custom user
+DATABASE_URL=postgresql://trading_user:your_password@localhost:5432/trading_db
+```
+
+## 🔴 Redis Setup
+
+### 1. Install Redis
+- **Windows**: Download from [redis.io](https://redis.io/download) or use WSL
+- **Ubuntu**: `sudo apt install redis-server`
+- **macOS**: `brew install redis`
+
+### 2. Start Redis Server
+```bash
+# Windows/Linux
+redis-server
+
+# macOS (if installed via brew)
+brew services start redis
+```
+
+### 3. Test Redis Connection
+```bash
+redis-cli ping
+# Should return: PONG
+```
+
+## 📊 Data Collection Setup
+
+### ⚠️ CRITICAL: Initial Data Collection
+
+Before running the main application, you **MUST** collect historical data to populate the database:
+
+### 1. Run Data Collector
+```bash
+# Navigate to data collector directory
+cd data_collecter
+
+# Run the 7-day data collector
+python btc_trend_analysis.py
+```
+
+### 2. Data Collector Explanation
+
+The `data_collecter/btc_trend_analysis.py` file:
+
+- **Fetches 7 days** of historical OHLC data for all supported assets
+- **Stores data** in PostgreSQL with proper timeframe formatting
+- **Creates baseline** for ML model predictions
+- **Populates** actual_prices table with historical data
+- **Generates** initial forecast entries
+
+### 3. What the Data Collector Does
+
+```python
+# The data collector performs these operations:
+1. Connects to Binance API for crypto data (BTC, ETH, etc.)
+2. Fetches Yahoo Finance data for stocks (NVDA, AAPL, etc.)
+3. Generates macro indicator historical data
+4. Stores OHLC data for multiple timeframes (1m, 5m, 15m, 1h, 4h, 1D, 1W)
+5. Creates database entries with proper symbol_timeframe format
+6. Validates data integrity and fills gaps
+```
+
+### 4. Expected Data Collection Output
+```
+✅ Collecting BTC data for 7 days...
+✅ Stored 168 data points for BTC_1H
+✅ Stored 1008 data points for BTC_15m
+✅ Collecting ETH data for 7 days...
+✅ Stored 168 data points for ETH_1H
+...
+✅ Data collection completed for all 25 assets
+```
+
+### 5. Verify Data Collection
+```bash
+# Check if data was stored correctly
+python -c "
+import asyncio
+from database import TradingDatabase
+import os
+from dotenv import load_dotenv
+
+async def check_data():
+    load_dotenv()
+    db = TradingDatabase()
+    await db.connect()
+    
+    async with db.pool.acquire() as conn:
+        count = await conn.fetchval('SELECT COUNT(*) FROM actual_prices')
+        symbols = await conn.fetch('SELECT DISTINCT symbol FROM actual_prices LIMIT 10')
+        print(f'Total data points: {count}')
+        print(f'Sample symbols: {[row[0] for row in symbols]}')
+
+asyncio.run(check_data())
+"
+```
+
+## 🚀 Running the Application
+
+### 1. Start the Server
+```bash
+# Make sure you're in the project root directory
+python main.py
+
+# Or using uvicorn directly
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### 2. Verify Server is Running
+```bash
+# Check health endpoint
+curl http://localhost:8000/api/health
+
+# Expected response:
 {
-  "assets": [
-    {
-      "symbol": "BTC",
-      "name": "Bitcoin",
-      "current_price": 45000.50,
-      "change_24h": 2.5,
-      "forecast_direction": "UP",
-      "confidence": 86,
-      "predicted_price": 46125.25,
-      "predicted_range": "$44,100.49–$47,250.51"
-    }
-  ]
-}
-```
-
-### 2. Asset Forecast
-**GET** `/api/asset/{symbol}/forecast`
-
-Returns detailed forecast, confidence score, and chart data for a specific asset.
-
-**Path Parameters:**
-- `symbol`: Asset symbol (e.g., BTC, ETH, NVDA, AAPL)
-
-**Query Parameters:**
-- `timeframe` (optional): `1D`, `7D`, `1M`, `1Y`, `5Y` (default: `1D`)
-
-**Response:**
-```json
-{
-  "symbol": "BTC",
-  "name": "Bitcoin",
-  "current_price": 45000.50,
-  "predicted_price": 46125.25,
-  "forecast_direction": "UP",
-  "confidence": 86,
-  "predicted_range": "$44,100.49–$47,250.51",
-  "change_24h": 2.5,
-  "chart": {
-    "actual": [44000, 44500, 45000],
-    "predicted": [45500, 46000, 46500],
-    "timestamps": ["2024-01-01T00:00:00", "2024-01-01T04:00:00", "2024-01-01T08:00:00"]
-  },
-  "last_updated": "2024-01-01T12:45:00Z"
-}
-```
-
-### 3. Historical Trends & Accuracy
-**GET** `/api/asset/{symbol}/trends`
-
-Returns accuracy and trend history for a given asset.
-
-**Path Parameters:**
-- `symbol`: Asset symbol
-
-**Query Parameters:**
-- `timeframe` (optional): `1W`, `7D`, `1M`, `1Y`, `5Y` (default: `7D`)
-- `view` (optional): `chart` or `table` (default: `chart`)
-
-**Response (Chart Mode):**
-```json
-{
-  "symbol": "BTC",
-  "accuracy": 86,
-  "chart": {
-    "forecast": [54000, 54320, 54100, 53800],
-    "actual": [54200, 54500, 53750, 53480],
-    "timestamps": ["00:00", "04:00", "08:00", "12:00"]
+  "status": "healthy",
+  "services": {
+    "database": "connected",
+    "redis": "connected",
+    "ml_model": "operational"
   }
 }
 ```
 
-**Response (Table Mode):**
-```json
-{
-  "symbol": "BTC",
-  "accuracy": 86,
-  "history": [
-    {
-      "date": "2024-01-01",
-      "forecast": "UP",
-      "actual": "UP",
-      "result": "Hit"
-    }
-  ]
-}
+## 🔗 API Endpoints
+
+### REST API
+- `GET /api/market/summary` - Market overview
+- `GET /api/asset/{symbol}/forecast` - Asset predictions
+- `GET /api/asset/{symbol}/trends` - Historical accuracy
+- `GET /api/assets/search` - Search assets
+- `GET /api/health` - System health
+
+### WebSocket Endpoints
+- `ws://localhost:8000/ws/asset/{symbol}/forecast` - Real-time forecasts
+- `ws://localhost:8000/ws/asset/{symbol}/trends` - Live trends
+- `ws://localhost:8000/ws/market/summary` - Market updates
+
+## 🧪 Testing the Setup
+
+### 1. Test Market Summary
+```bash
+curl "http://localhost:8000/api/market/summary?class=crypto&limit=5"
 ```
 
-### 4. Asset Search
-**GET** `/api/assets/search`
-
-Search available assets by name or symbol.
-
-**Query Parameters:**
-- `q`: Search query
-
-**Response:**
-```json
-{
-  "results": [
-    { "symbol": "BTC", "name": "Bitcoin", "class": "crypto" },
-    { "symbol": "AAPL", "name": "Apple", "class": "stocks" }
-  ]
-}
+### 2. Test Asset Forecast
+```bash
+curl "http://localhost:8000/api/asset/BTC/forecast?timeframe=1D"
 ```
 
-### 5. Export Historical Data
-**GET** `/api/asset/{symbol}/export`
+### 3. Test WebSocket (using wscat)
+```bash
+# Install wscat
+npm install -g wscat
 
-Exports historical forecast vs. actual data as CSV.
-
-**Path Parameters:**
-- `symbol`: Asset symbol
-
-**Query Parameters:**
-- `timeframe` (optional): `1W`, `1M`, `1Y`, `5Y` (default: `1M`)
-
-**Response:** CSV file download
-
-### 6. Export Trends Data
-**GET** `/api/asset/{symbol}/trends/export`
-
-Exports trends historical data as CSV with accuracy metrics.
-
-**Path Parameters:**
-- `symbol`: Asset symbol
-
-**Query Parameters:**
-- `timeframe` (optional): `1W`, `1M`, `1Y`, `5Y` (default: `1M`)
-
-**Response:** CSV file download
-
-### 7. Favorites Management
-
-#### Add Favorite
-**POST** `/api/favorites/{symbol}`
-
-**Response:**
-```json
-{
-  "success": true,
-  "symbol": "BTC"
-}
+# Test WebSocket connection
+wscat -c ws://localhost:8000/ws/asset/BTC/forecast
 ```
 
-#### Remove Favorite
-**DELETE** `/api/favorites/{symbol}`
+## 🔧 Troubleshooting
 
-**Response:**
-```json
-{
-  "success": true,
-  "symbol": "BTC"
-}
+### Common Issues
+
+#### 1. Database Connection Failed
+```
+❌ Database connection failed: connection refused
+```
+**Solution**: 
+- Ensure PostgreSQL is running
+- Check DATABASE_URL in .env
+- Verify database exists
+
+#### 2. Redis Connection Failed
+```
+⚠️ Redis not available, using memory cache
+```
+**Solution**:
+- Start Redis server: `redis-server`
+- Check REDIS_HOST and REDIS_PORT in .env
+
+#### 3. ML Model Not Found
+```
+❌ CRITICAL: Cannot start: [Errno 2] No such file or directory: 'models/specialized_trading_model.pkl'
+```
+**Solution**:
+- Ensure the model file exists in `models/` directory
+- Check if the model was included in the repository
+
+#### 4. No Historical Data
+```
+❌ No database data available for BTC 1D
+```
+**Solution**:
+- Run the data collector: `python data_collecter/btc_trend_analysis.py`
+- Wait for data collection to complete
+- Restart the application
+
+#### 5. API Rate Limiting
+```
+❌ Rate limited for NVDA, will retry later
+```
+**Solution**:
+- Add API keys to .env file
+- Reduce request frequency
+- Use multiple API providers
+
+### Debug Mode
+
+Enable detailed logging by setting:
+```python
+# In main.py, change logging level
+logging.basicConfig(level=logging.DEBUG, format='%(message)s')
 ```
 
-#### Get Favorites
-**GET** `/api/favorites`
+## 📁 Project Structure
 
-**Response:**
-```json
-{
-  "favorites": ["BTC", "ETH", "NVDA"]
-}
+```
+TradingApp/
+├── main.py                 # FastAPI application entry point
+├── database.py             # Database operations
+├── requirements.txt        # Python dependencies
+├── .env                   # Environment variables
+├── .env.example           # Environment template
+├── config/
+│   └── settings.py        # Configuration management
+├── modules/
+│   ├── api_routes.py      # API endpoints
+│   ├── ml_predictor.py    # ML prediction engine
+│   ├── rate_limiter.py    # Rate limiting
+│   └── accuracy_validator.py
+├── models/
+│   └── specialized_trading_model.pkl  # Pre-trained ML model
+├── data_collecter/
+│   └── btc_trend_analysis.py  # Historical data collector
+├── realtime_websocket_service.py  # Crypto WebSocket streams
+├── stock_realtime_service.py     # Stock real-time service
+├── multi_asset_support.py        # Multi-asset data fetching
+├── async_task_manager.py         # Task management
+└── gap_filling_service.py        # Data gap filling
 ```
 
-### 8. Accuracy Validation
-**POST** `/api/asset/{symbol}/validate`
+## 🔒 Security Notes
 
-Validate forecast accuracy for symbol.
+- Never commit `.env` file to version control
+- Use strong passwords for database
+- Consider using environment-specific configurations
+- Enable Redis authentication in production
+- Use HTTPS in production environments
 
-**Response:**
-```json
-{
-  "symbol": "BTC",
-  "validation": {
-    "accuracy": 86,
-    "total_predictions": 100,
-    "correct_predictions": 86
-  },
-  "timestamp": "2024-01-01T12:45:00Z"
-}
-```
+## 📈 Performance Optimization
 
-### 9. System Health
-**GET** `/api/health`
+- **Database**: Connection pooling enabled (5-20 connections)
+- **Redis**: Multi-database setup for different cache types
+- **WebSocket**: Connection pooling and efficient broadcasting
+- **API**: Rate limiting and response caching
+- **ML**: Prediction caching with TTL
 
-Comprehensive system health check.
+## 🤝 Contributing
 
-**Response:**
-```json
-{
-  "status": "healthy",
-  "timestamp": "2024-01-01T12:45:00Z",
-  "services": {
-    "database": "connected",
-    "redis": "connected (api_cache, ml_cache)",
-    "ml_model": "operational",
-    "external_apis": "operational"
-  },
-  "total_check_time": "0.85s",
-  "db_test_time": "0.12s",
-  "ml_test_time": "0.45s",
-  "api_test_time": "0.28s"
-}
-```
+1. Fork the repository
+2. Create feature branch
+3. Make changes
+4. Test thoroughly
+5. Submit pull request
 
-### 10. System Statistics
+## 📄 License
 
-#### WebSocket Stats
-**GET** `/api/websocket/stats`
-
-**Response:**
-```json
-{
-  "total_connections": 15,
-  "connections_by_symbol": {
-    "BTC": 5,
-    "ETH": 3,
-    "NVDA": 2
-  },
-  "timestamp": "2024-01-01T12:45:00Z"
-}
-```
-
-#### System Stats
-**GET** `/api/system/stats`
-
-**Response:**
-```json
-{
-  "task_manager": {
-    "total_tasks": 150,
-    "completed_tasks": 145,
-    "failed_tasks": 2,
-    "active_tasks": 3
-  },
-  "websocket_connections": 15,
-  "timestamp": "2024-01-01T12:45:00Z"
-}
-```
+This project is licensed under the MIT License.
 
 ---
 
-## WebSocket Connections
+## ⚡ Quick Start Checklist
 
-### 1. Asset Forecast WebSocket
-**WS** `/ws/asset/{symbol}/forecast`
+- [ ] Install Python 3.8+, PostgreSQL, Redis
+- [ ] Clone repository and create virtual environment
+- [ ] Install dependencies: `pip install -r requirements.txt`
+- [ ] Copy `.env.example` to `.env` and configure variables
+- [ ] Create PostgreSQL database
+- [ ] Start Redis server
+- [ ] **Run data collector**: `python data_collecter/btc_trend_analysis.py`
+- [ ] Start application: `python main.py`
+- [ ] Test health endpoint: `curl http://localhost:8000/api/health`
+- [ ] Test API endpoints and WebSocket connections
 
-Real-time forecast updates for a specific asset.
-
-**Connection Messages:**
-
-#### Incoming Messages (Client → Server)
-
-**Set Timeframe:**
-```json
-{
-  "type": "set_timeframe",
-  "timeframe": "1D"
-}
-```
-
-**Set Symbol:**
-```json
-{
-  "type": "set_symbol",
-  "symbol": "ETH"
-}
-```
-
-#### Outgoing Messages (Server → Client)
-
-**Crypto Forecast Update:**
-```json
-{
-  "type": "timeframe_forecast",
-  "symbol": "BTC",
-  "timeframe": "4h",
-  "current_price": 45000.50,
-  "predicted_price": 46125.25,
-  "forecast_direction": "UP",
-  "confidence": 86,
-  "change_24h": 2.5,
-  "chart": {
-    "past": [44000, 44500, 45000],
-    "future": [45500, 46000, 46500],
-    "timestamps": ["00:00", "04:00", "08:00"]
-  },
-  "timestamp": "2024-01-01T12:45:00Z"
-}
-```
-
-**Stock Forecast Update:**
-```json
-{
-  "type": "stock_forecast",
-  "symbol": "NVDA",
-  "timeframe": "1D",
-  "current_price": 875.50,
-  "predicted_price": 890.25,
-  "forecast_direction": "UP",
-  "confidence": 82,
-  "change_24h": 1.8,
-  "chart": {
-    "past": [860, 870, 875],
-    "future": [880, 885, 890],
-    "timestamps": ["09:30", "12:00", "15:30"]
-  },
-  "timestamp": "2024-01-01T12:45:00Z"
-}
-```
-
-**Timeframe Changed:**
-```json
-{
-  "type": "timeframe_changed",
-  "symbol": "BTC",
-  "timeframe": "1D",
-  "timestamp": "2024-01-01T12:45:00Z"
-}
-```
-
-**Symbol Changed:**
-```json
-{
-  "type": "symbol_changed",
-  "symbol": "ETH",
-  "timeframe": "4h",
-  "timestamp": "2024-01-01T12:45:00Z"
-}
-```
-
-**Ping:**
-```json
-{
-  "type": "ping",
-  "symbol": "BTC",
-  "timeframe": "4h",
-  "asset_type": "crypto",
-  "timestamp": "2024-01-01T12:45:00Z"
-}
-```
-
-### 2. Asset Trends WebSocket
-**WS** `/ws/asset/{symbol}/trends`
-
-Real-time trends and accuracy updates for a specific asset.
-
-**Connection Messages:**
-
-#### Incoming Messages (Client → Server)
-
-**Set Symbol:**
-```json
-{
-  "type": "set_symbol",
-  "symbol": "ETH"
-}
-```
-
-#### Outgoing Messages (Server → Client)
-
-**Trends Update:**
-```json
-{
-  "type": "trends_update",
-  "symbol": "BTC",
-  "accuracy": 86,
-  "chart": {
-    "forecast": [54000, 54320, 54100, 53800],
-    "actual": [54200, 54500, 53750, 53480],
-    "timestamps": ["00:00", "04:00", "08:00", "12:00"]
-  },
-  "last_updated": "2024-01-01T12:45:00Z"
-}
-```
-
-### 3. Market Summary WebSocket
-**WS** `/ws/market/summary`
-
-Real-time market summary updates for all assets.
-
-**Connection Messages:**
-
-#### Incoming Messages (Client → Server)
-
-**Set Filter:**
-```json
-{
-  "type": "set_filter",
-  "class_filter": "crypto"
-}
-```
-
-#### Outgoing Messages (Server → Client)
-
-**Market Summary Update:**
-```json
-{
-  "type": "market_summary_update",
-  "assets": [
-    {
-      "symbol": "BTC",
-      "name": "Bitcoin",
-      "current_price": 45000.50,
-      "change_24h": 2.5,
-      "volume": 28500000000,
-      "forecast_direction": "UP",
-      "confidence": 86,
-      "predicted_price": 46125.25,
-      "data_source": "Binance Stream",
-      "asset_class": "crypto"
-    }
-  ],
-  "timestamp": "2024-01-01T12:45:00Z",
-  "update_count": 10,
-  "crypto_count": 6,
-  "stock_count": 4,
-  "interval": 2
-}
-```
-
-### 4. Deprecated Mobile WebSocket
-**WS** `/ws/mobile`
-
-**Note:** This endpoint is deprecated. Use `/ws/asset/{symbol}/forecast` or `/ws/asset/{symbol}/trends` instead.
-
-**Connection Response:**
-- WebSocket closes immediately with code 1000 and reason message.
-
----
-
-## Supported Assets
-
-### Cryptocurrencies (10)
-- BTC (Bitcoin)
-- ETH (Ethereum)
-- USDT (Tether)
-- XRP (Ripple)
-- BNB (Binance Coin)
-- SOL (Solana)
-- USDC (USD Coin)
-- DOGE (Dogecoin)
-- ADA (Cardano)
-- TRX (Tron)
-
-### Stocks (10)
-- NVDA (NVIDIA)
-- MSFT (Microsoft)
-- AAPL (Apple)
-- GOOGL (Alphabet)
-- AMZN (Amazon)
-- META (Meta)
-- AVGO (Broadcom)
-- TSLA (Tesla)
-- BRK-B (Berkshire Hathaway)
-- JPM (JPMorgan Chase)
-
-### Macro Indicators (5)
-- GDP (Gross Domestic Product)
-- CPI (Consumer Price Index)
-- UNEMPLOYMENT (Unemployment Rate)
-- FED_RATE (Federal Interest Rate)
-- CONSUMER_CONFIDENCE (Consumer Confidence Index)
-
----
-
-## Timeframes
-
-### Asset Timeframes
-- `1m` - 1 Minute
-- `5m` - 5 Minutes
-- `15m` - 15 Minutes
-- `30m` - 30 Minutes
-- `1h` - 1 Hour
-- `4h` / `4H` - 4 Hours
-- `1D` - 1 Day
-- `1W` - 1 Week
-
-### Export/Trends Timeframes
-- `1W` - 1 Week
-- `7D` - 7 Days
-- `1M` - 1 Month
-- `1Y` - 1 Year
-- `5Y` - 5 Years
-
----
-
-## Error Handling
-
-### HTTP Status Codes
-- `200` - Success
-- `400` - Bad Request
-- `404` - Not Found
-- `429` - Rate Limited
-- `500` - Internal Server Error
-
-### Error Response Format
-```json
-{
-  "error": "Error description",
-  "timestamp": "2024-01-01T12:45:00Z"
-}
-```
-
-### WebSocket Error Handling
-- Connection closes with appropriate close codes
-- Automatic reconnection with exponential backoff
-- Graceful degradation when services unavailable
-
----
-
-## Rate Limiting
-
-- Default rate limits apply to all endpoints
-- Export endpoints have stricter limits
-- Rate limit headers included in responses
-- 429 status code returned when limits exceeded
-
----
-
-## Caching
-
-### Redis Caching
-- Prediction cache with configurable TTL
-- Distributed caching across instances
-- Automatic fallback to memory cache
-
-### Memory Caching
-- Local prediction cache
-- WebSocket connection pooling
-- Background cleanup tasks
-
----
-
-## Real-time Features
-
-### WebSocket Connection Management
-- Connection pooling and reuse
-- Graceful reconnection handling
-- Automatic cleanup of stale connections
-- Health monitoring with ping/pong
-
-### Live Data Sources
-- Binance WebSocket for crypto prices
-- Yahoo Finance API for stock prices
-- Real-time ML predictions
-- Streaming market data
-
----
-
-## Security
-
-### CORS Configuration
-- Configurable allowed origins
-- Credential support
-- Method and header restrictions
-
-### Rate Limiting
-- IP-based rate limiting
-- Endpoint-specific limits
-- Configurable time windows
-
-### Input Validation
-- Parameter validation
-- SQL injection prevention
-- XSS protection
+**🎉 Your Trading AI Platform is now ready!**

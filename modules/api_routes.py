@@ -558,6 +558,10 @@ def setup_routes(app: FastAPI, model, database=None):
             except Exception as e:
                 logging.error(f"❌ DEBUG: Reconnection failed: {e}")
             return False
+        
+        def get_connection_count(self):
+            """Get total number of active connections"""
+            return sum(len(connections) for connections in self.active_connections.values())
     
     manager = ConnectionManager()
     
