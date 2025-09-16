@@ -146,19 +146,31 @@ class TradingDatabase:
                 forecast_data.get('trend_score'))
     
     async def store_actual_price(self, symbol, price_data, timeframe='1D'):
-        """Store actual market price with OHLC data"""
+        """Store actual market price with OHLC data and duplicate handling"""
         if not self.pool:
             return
             
         async with self.pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO actual_prices (symbol, timeframe, open_price, high, low, close_price, price, change_24h, volume, timestamp)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            """, symbol, timeframe, 
-                price_data.get('open_price'), price_data.get('high'), 
-                price_data.get('low'), price_data.get('close_price'),
-                price_data['current_price'], price_data.get('change_24h'), 
-                price_data.get('volume'), price_data.get('timestamp', datetime.now()))
+            try:
+                await conn.execute("""
+                    INSERT INTO actual_prices (symbol, timeframe, open_price, high, low, close_price, price, change_24h, volume, timestamp)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    ON CONFLICT (symbol, timestamp) DO UPDATE SET
+                        price = EXCLUDED.price,
+                        change_24h = EXCLUDED.change_24h,
+                        volume = EXCLUDED.volume,
+                        high = GREATEST(actual_prices.high, EXCLUDED.high),
+                        low = LEAST(actual_prices.low, EXCLUDED.low),
+                        close_price = EXCLUDED.close_price
+                """, symbol, timeframe, 
+                    price_data.get('open_price'), price_data.get('high'), 
+                    price_data.get('low'), price_data.get('close_price'),
+                    price_data['current_price'], price_data.get('change_24h'), 
+                    price_data.get('volume'), price_data.get('timestamp', datetime.now()))
+            except Exception as e:
+                # Silently handle duplicates for high-frequency data
+                if "duplicate key" not in str(e).lower():
+                    logging.error(f"❌ Failed to store price for {symbol}: {e}")
     
     async def get_last_stored_time(self, symbol):
         """Get last stored timestamp for a symbol"""

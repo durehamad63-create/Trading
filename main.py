@@ -18,44 +18,13 @@ logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
 sys.path.append(os.path.join(os.path.dirname(__file__), 'modules'))
 sys.path.append(os.path.dirname(__file__))
 
-# Required class for model loading
-class APIGenerator:
-    def __init__(self, models=None):
-        self.models = models or {}
-    
-    def __getstate__(self):
-        return self.__dict__
-    
-    def __setstate__(self, state):
-        self.__dict__.update(state)
-    
-    def asset_forecast(self, symbol, timeframe='7D'):
-        if timeframe in self.models:
-            model = self.models[timeframe]['model']
-            features = self.models[timeframe]['features']
-            dummy_features = np.random.randn(1, len(features))
-            pred_return = model.predict(dummy_features)[0]
-        else:
-            pred_return = np.random.uniform(-0.02, 0.02)
-        
-        confidence = np.random.uniform(75, 95)
-        direction = 'UP' if pred_return > 0.01 else 'DOWN' if pred_return < -0.01 else 'HOLD'
-        
-        return {
-            'forecast_direction': direction,
-            'confidence': int(confidence)
-        }
+
 
 from modules.ml_predictor import MobileMLModel
 from modules.api_routes import setup_routes
 try:
-    from database import TradingDatabase
-    import os
-    from dotenv import load_dotenv
-    load_dotenv()
-    database_url = os.getenv('DATABASE_URL', 'postgresql://postgres:admin123@localhost:5432/trading_db')
-    db = TradingDatabase(database_url)
-
+    from utils.database_manager import DatabaseManager
+    db = DatabaseManager.get_instance()
 except Exception as e:
     logging.error(f"❌ Database import failed: {e}")
     db = None
@@ -82,7 +51,7 @@ async def lifespan(app: FastAPI):
     # Database connection with connection pooling
     if db:
         try:
-            await db.connect()
+            await DatabaseManager.initialize()
             if db.pool:
                 pass
             else:

@@ -35,7 +35,7 @@ class StockRealtimeService:
         # Update intervals per timeframe (seconds)
         self.update_intervals = {
             '1m': 60, '5m': 300, '15m': 900, '30m': 1800,
-            '1h': 3600, '4h': 14400, '1D': 86400, '1W': 604800
+            '1h': 3600, '4H': 14400, '1D': 86400, '1W': 604800
         }
         
         self.last_update = {}
@@ -94,11 +94,11 @@ class StockRealtimeService:
                 # Move to next pair of symbols
                 current_index = (current_index + 2) % len(symbols)
                 
-                # Wait 1 second before next pair (completes full cycle in 5 seconds)
-                await asyncio.sleep(1)
+                # Wait 0.1 second before next pair (completes full cycle in 0.5 seconds)
+                await asyncio.sleep(0.1)
                 
             except Exception as e:
-                logging.error(f"❌ Dual rotating stock stream error: {e}")
+                ErrorHandler.log_stream_error('stock_dual', 'ALL', str(e))
                 await asyncio.sleep(5)
     
     async def _process_single_stock(self, symbol):
@@ -113,14 +113,19 @@ class StockRealtimeService:
                     'timestamp': datetime.now()
                 }
                 
-                # Log price updates
-                # logging.info(f"📊 STOCK UPDATE: {symbol} = ${price_data['current_price']:.2f} ({price_data['change_24h']:+.2f}%) - {price_data['data_source']}")
+                # Log price updates removed
                 
-                # Update candles and generate forecasts if connections exist
+                # Always store data for all timeframes (regardless of connections)
+                asyncio.create_task(self._store_stock_data_all_timeframes(symbol, price_data))
+                
+                # Update candles and broadcast only if connections exist
                 if symbol in self.active_connections and self.active_connections[symbol]:
-                    await self._update_stock_candles_and_forecast(symbol, price_data)
+                    # Immediate price broadcast
+                    asyncio.create_task(self._broadcast_stock_price_update(symbol, price_data))
+                    # ML predictions in background
+                    asyncio.create_task(self._update_stock_candles_and_forecast(symbol, price_data))
         except Exception as e:
-            logging.error(f"❌ Error processing {symbol}: {e}")
+            ErrorHandler.log_stream_error('stock', symbol, str(e))
     
 
     
@@ -228,7 +233,7 @@ class StockRealtimeService:
                 logging.info(f"🤖 Generated ML forecast for {symbol} {timeframe}")
                 
         except Exception as e:
-            logging.error(f"❌ Error updating stock candles for {symbol}: {e}")
+            ErrorHandler.log_stream_error('stock_candle', symbol, str(e))
     
     async def _update_stock_candle_data(self, symbol, timeframe, price_data, timestamp):
         """Update candle data for specific timeframe"""
@@ -241,7 +246,7 @@ class StockRealtimeService:
             # Get timeframe interval in minutes
             interval_map = {
                 '1m': 1, '5m': 5, '15m': 15, '30m': 30,
-                '1h': 60, '4h': 240, '1D': 1440, '1W': 10080
+                '1h': 60, '4H': 240, '1D': 1440, '1W': 10080
             }
             interval_minutes = interval_map.get(timeframe, 60)
             
@@ -281,7 +286,100 @@ class StockRealtimeService:
                     candles.pop(0)
                     
         except Exception as e:
-            logging.error(f"Error updating stock candle data: {e}")
+            ErrorHandler.log_stream_error('stock_candle_data', 'ALL', str(e))
+    
+    async def _broadcast_stock_price_update(self, symbol, price_data):
+        """Immediate stock price broadcast without ML predictions"""
+        try:
+            current_time = datetime.now()
+            
+            # Get unique timeframes from active connections
+            timeframes = set()
+            if symbol in self.active_connections:
+                for conn_data in self.active_connections[symbol].values():
+                    timeframes.add(conn_data['timeframe'])
+            
+            # Broadcast to all timeframes immediately
+            for timeframe in timeframes:
+                stock_price_data = {
+                    "type": "stock_price_update",
+                    "symbol": str(symbol),
+                    "timeframe": str(timeframe),
+                    "current_price": float(price_data['current_price']),
+                    "change_24h": float(price_data['change_24h']),
+                    "volume": float(price_data['volume']),
+                    "data_source": price_data.get('data_source', 'Stock API'),
+                    "timestamp": current_time.strftime("%H:%M:%S"),
+                    "last_updated": current_time.isoformat()
+                }
+                
+                await self._broadcast_to_timeframe(symbol, timeframe, stock_price_data)
+                
+        except Exception as e:
+            ErrorHandler.log_websocket_error('stock_broadcast', str(e))
+    
+    def _adjust_timestamp_for_timeframe(self, timestamp, timeframe):
+        """Adjust timestamp to prevent duplicates for different timeframes"""
+        if timeframe == '1W':
+            # Weekly: round to start of week (Monday)
+            days_since_monday = timestamp.weekday()
+            week_start = timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
+            week_start = week_start - timedelta(days=days_since_monday)
+            return week_start
+        elif timeframe == '1D':
+            # Daily: round to start of day
+            return timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif timeframe == '4H':
+            # 4-hour: round to 4-hour boundaries (0, 4, 8, 12, 16, 20)
+            hour_boundary = (timestamp.hour // 4) * 4
+            return timestamp.replace(hour=hour_boundary, minute=0, second=0, microsecond=0)
+        elif timeframe == '1h':
+            # Hourly: round to start of hour
+            return timestamp.replace(minute=0, second=0, microsecond=0)
+        elif timeframe in ['15m', '30m']:
+            # 15/30 minute: round to appropriate boundaries
+            interval = 15 if timeframe == '15m' else 30
+            minute_boundary = (timestamp.minute // interval) * interval
+            return timestamp.replace(minute=minute_boundary, second=0, microsecond=0)
+        elif timeframe == '5m':
+            # 5 minute: round to 5-minute boundaries
+            minute_boundary = (timestamp.minute // 5) * 5
+            return timestamp.replace(minute=minute_boundary, second=0, microsecond=0)
+        else:
+            # 1m and others: round to minute
+            return timestamp.replace(second=0, microsecond=0)
+    
+    async def _store_stock_data_all_timeframes(self, symbol, price_data):
+        """Store stock price data for all timeframes"""
+        try:
+            current_time = datetime.now()
+            timeframes = ['1m', '5m', '15m', '1h', '4H', '1D', '1W']
+            
+            for timeframe in timeframes:
+                timeframe_symbol = f"{symbol}_{timeframe}"
+                
+                # Adjust timestamp for timeframe to prevent duplicates
+                adjusted_time = self._adjust_timestamp_for_timeframe(current_time, timeframe)
+                
+                # Update price data with adjusted timestamp
+                adjusted_price_data = {
+                    **price_data,
+                    'timestamp': adjusted_time
+                }
+                
+                # Store price data
+                if self.database and self.database.pool:
+                    await self.database.store_actual_price(timeframe_symbol, adjusted_price_data, timeframe)
+                    
+                    # Generate and store forecast
+                    try:
+                        prediction = self.model.predict(symbol)
+                        await self.database.store_forecast(timeframe_symbol, prediction)
+                    except Exception as e:
+                        logging.warning(f"Stock forecast failed for {timeframe_symbol}: {e}")
+                        
+        except Exception as e:
+            ErrorHandler.log_database_error('stock_store_timeframes', 'ALL', str(e))
     
     async def _generate_stock_forecast(self, symbol, timeframe, current_time):
         """Generate ML forecast for stock symbol and timeframe"""
@@ -295,20 +393,23 @@ class StockRealtimeService:
             candles = self.candle_cache[symbol][timeframe]
             current_candle = candles[-1]
             
-            # Generate ML prediction
-            prediction = self.model.predict(symbol)
-            if not isinstance(prediction, dict):
+            # Use cached prediction for immediate updates, generate fresh in background
+            try:
+                # Try cached first for speed
+                if hasattr(self.model, 'prediction_cache') and symbol in self.model.prediction_cache:
+                    cache_time, prediction = self.model.prediction_cache[symbol]
+                    if (datetime.now().timestamp() - cache_time) > 10:  # Refresh if older than 10s
+                        asyncio.create_task(self._generate_fresh_stock_prediction(symbol))
+                else:
+                    # Generate fresh prediction in background
+                    prediction = self.model.predict(symbol)
+                    asyncio.create_task(self._generate_fresh_stock_prediction(symbol))
+                    
+                if not isinstance(prediction, dict):
+                    return
+            except Exception as e:
+                logging.warning(f"Stock prediction failed for {symbol}: {e}")
                 return
-            
-            # Cache prediction in Redis
-            if self.redis_client:
-                try:
-                    import json
-                    cache_key = f"prediction:{symbol}"
-                    self.redis_client.setex(cache_key, 30, json.dumps(prediction))
-                    logging.info(f"💾 Cached stock prediction for {symbol} in Redis")
-                except Exception as e:
-                    logging.warning(f"Redis cache failed for {symbol}: {e}")
             
             # Create forecast data
             current_price = float(current_candle['close'])
@@ -346,7 +447,7 @@ class StockRealtimeService:
                 logging.info(f"📡 Broadcasted {symbol} forecast to {connections_count} WebSocket connections")
             
         except Exception as e:
-            logging.error(f"❌ Error generating stock forecast: {e}")
+            ErrorHandler.log_prediction_error('stock_forecast', str(e))
     
     async def _broadcast_to_timeframe(self, symbol, timeframe, data):
         """Efficient broadcast with connection pooling"""
@@ -486,6 +587,14 @@ class StockRealtimeService:
             logging.error(f"❌ DEBUG: Failed to send stock historical data for {symbol} {timeframe}: {e}")
             import traceback
             logging.error(f"🔍 DEBUG: Full traceback: {traceback.format_exc()}")
+    
+    async def _generate_fresh_stock_prediction(self, symbol):
+        """Generate fresh stock prediction in background"""
+        try:
+            prediction = self.model.predict(symbol)
+            # Cache will be updated by model.predict() method
+        except Exception as e:
+            logging.warning(f"Background stock prediction failed for {symbol}: {e}")
     
     def remove_connection(self, symbol, connection_id):
         """Remove WebSocket connection"""

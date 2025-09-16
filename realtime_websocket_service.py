@@ -6,9 +6,12 @@ import asyncio
 import websockets
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from modules.ml_predictor import MobileMLModel
 from multi_asset_support import MultiAssetSupport, multi_asset
+from config.symbols import CRYPTO_SYMBOLS
+from utils.error_handler import ErrorHandler
+from utils.cache_manager import CacheKeys
 import aiohttp
 
 class RealTimeWebSocketService:
@@ -21,18 +24,13 @@ class RealTimeWebSocketService:
         self.price_cache = {}  # Real-time tick data
         self.candle_cache = {}  # Timeframe-specific candle data
         
-        # Binance WebSocket streams for all crypto symbols
-        self.binance_symbols = {
-            'BTC': 'btcusdt', 'ETH': 'ethusdt', 'BNB': 'bnbusdt',
-            'SOL': 'solusdt', 'ADA': 'adausdt', 'XRP': 'xrpusdt',
-            'DOGE': 'dogeusdt', 'TRX': 'trxusdt'
-            # Note: USDT and USDC are stablecoins, handled separately
-        }
+        # Use centralized symbol configuration
+        self.binance_symbols = {k: v['binance'].lower() for k, v in CRYPTO_SYMBOLS.items() if v.get('binance')}
         
         # Timeframe intervals in minutes
         self.timeframe_intervals = {
             '1m': 1, '5m': 5, '15m': 15, '30m': 30,
-            '1h': 60, '4h': 240, '1D': 1440, '1W': 10080
+            '1h': 60, '4H': 240, '1D': 1440, '1W': 10080
         }
     
     async def start_binance_streams(self):
@@ -40,7 +38,7 @@ class RealTimeWebSocketService:
         # Start all symbols immediately
         for symbol, binance_symbol in self.binance_symbols.items():
             asyncio.create_task(self._binance_stream(symbol, binance_symbol))
-            await asyncio.sleep(0.1)  # Small delay between connections
+            await asyncio.sleep(0.01)  # Minimal delay between connections
         
         # Handle stablecoins separately with fixed prices
         asyncio.create_task(self._handle_stablecoins())
@@ -64,10 +62,10 @@ class RealTimeWebSocketService:
                         'timestamp': datetime.now()
                     }
                 
-                await asyncio.sleep(30)  # Update every 30 seconds
+                await asyncio.sleep(5)  # Update every 5 seconds
                 
             except Exception as e:
-                logging.error(f"❌ Stablecoin handler error: {e}")
+                ErrorHandler.log_stream_error('stablecoin', 'ALL', str(e))
                 await asyncio.sleep(60)
     
     async def _binance_stream(self, symbol, binance_symbol):
@@ -95,25 +93,38 @@ class RealTimeWebSocketService:
                                 'volume': volume,
                                 'timestamp': datetime.now()
                             }
+                            
+                            # Stream log removed
 
                             
-                            # Update candle data for all timeframes and generate forecasts
+                            # Always store data for all timeframes (regardless of connections)
+                            asyncio.create_task(self._store_all_timeframes(symbol, current_price, volume, change_24h))
+                            
+                            # Update candle data and broadcast only if connections exist
                             if symbol in self.active_connections and self.active_connections[symbol]:
+                                # Immediate price broadcast without waiting for ML
+                                asyncio.create_task(self._broadcast_price_update(symbol, current_price, change_24h, volume))
+                                # ML predictions in background (non-blocking)
                                 asyncio.create_task(self._update_candles_and_forecast(symbol, current_price, volume, change_24h))
                             
                         except Exception as e:
-                            logging.warning(f"Error processing message for {symbol}: {e}")
+                            ErrorHandler.log_stream_error('binance_message', symbol, str(e))
                             continue
                         
             except Exception as e:
                 error_msg = str(e)
                 if "400" in error_msg:
-                    logging.error(f"❌ Binance API error for {symbol}: 400")
-                    # Don't retry immediately for 400 errors
-                    await asyncio.sleep(60)
-                else:
-                    logging.error(f"❌ Binance stream error for {symbol}: {e}")
+                    ErrorHandler.log_api_error('binance', symbol, '400')
+                    await asyncio.sleep(5)
+                elif "429" in error_msg:
+                    ErrorHandler.log_api_error('binance', symbol, '429')
                     await asyncio.sleep(10)
+                elif "connection" in error_msg.lower():
+                    ErrorHandler.log_stream_error('binance', symbol, f'Connection failed - {e}')
+                    await asyncio.sleep(3)
+                else:
+                    ErrorHandler.log_stream_error('binance', symbol, str(e))
+                    await asyncio.sleep(1)
                 
                 # Remove from cache if connection fails
                 if symbol in self.price_cache:
@@ -130,34 +141,33 @@ class RealTimeWebSocketService:
                 for conn_data in self.active_connections[symbol].values():
                     timeframes.add(conn_data['timeframe'])
             
-            # Update candles for each timeframe
+            # Update candles and generate forecasts for each timeframe
             for timeframe in timeframes:
                 await self._update_candle_data(symbol, timeframe, price, volume, current_time)
                 
-                # Rate limit predictions per timeframe - more frequent for 4h
-                rate_key = f"{symbol}_{timeframe}"
-                if not hasattr(self, 'last_prediction_time'):
-                    self.last_prediction_time = {}
-                
-                update_interval = 5 if timeframe in ['4h', '4H'] else self._get_update_interval(timeframe)
-                if (rate_key in self.last_prediction_time and 
-                    (current_time - self.last_prediction_time[rate_key]).total_seconds() < update_interval):
-                    continue
-                
-                # Generate timeframe-specific forecast
+                # Generate forecast for every price update (no rate limiting)
                 await self._generate_timeframe_forecast(symbol, timeframe, current_time)
-                self.last_prediction_time[rate_key] = current_time
+                
+                # Store price data for every timeframe
+                timeframe_symbol = f"{symbol}_{timeframe}"
+                price_data = {
+                    'current_price': price,
+                    'change_24h': change_24h,
+                    'volume': volume,
+                    'timestamp': current_time
+                }
+                await self._store_realtime_data(timeframe_symbol, price_data, timeframe)
                 
         except Exception as e:
-            logging.error(f"Error updating candles and forecast for {symbol}: {e}")
+            ErrorHandler.log_stream_error('candle_update', symbol, str(e))
     
     def _get_update_interval(self, timeframe):
-        """Get appropriate update interval for timeframe"""
+        """Get appropriate update interval for timeframe - faster updates"""
         intervals = {
-            '1m': 5, '5m': 15, '15m': 30, '30m': 60,
-            '1h': 120, '4h': 300, '1D': 600, '1W': 1800
+            '1m': 1, '5m': 2, '15m': 3, '30m': 5,
+            '1h': 10, '4H': 1, '1D': 30, '1W': 60
         }
-        return intervals.get(timeframe, 60)
+        return intervals.get(timeframe, 5)
     
     async def _update_candle_data(self, symbol, timeframe, price, volume, timestamp):
         """Update candle data for specific timeframe"""
@@ -207,7 +217,36 @@ class RealTimeWebSocketService:
                     candles.pop(0)
                     
         except Exception as e:
-            logging.error(f"Error updating candle data: {e}")
+            ErrorHandler.log_stream_error('candle_data', 'ALL', str(e))
+    
+    async def _broadcast_price_update(self, symbol, current_price, change_24h, volume):
+        """Immediate price broadcast without ML predictions"""
+        try:
+            current_time = datetime.now()
+            
+            # Get unique timeframes from active connections
+            timeframes = set()
+            if symbol in self.active_connections:
+                for conn_data in self.active_connections[symbol].values():
+                    timeframes.add(conn_data['timeframe'])
+            
+            # Broadcast to all timeframes immediately
+            for timeframe in timeframes:
+                price_data = {
+                    "type": "price_update",
+                    "symbol": str(symbol),
+                    "timeframe": str(timeframe),
+                    "current_price": float(current_price),
+                    "change_24h": float(change_24h),
+                    "volume": float(volume),
+                    "timestamp": current_time.strftime("%H:%M:%S"),
+                    "last_updated": current_time.isoformat()
+                }
+                
+                await self._broadcast_to_timeframe(symbol, timeframe, price_data)
+                
+        except Exception as e:
+            ErrorHandler.log_websocket_error('broadcast', str(e))
     
     async def _generate_timeframe_forecast(self, symbol, timeframe, current_time):
         """Generate real-time price update for specific timeframe"""
@@ -222,13 +261,29 @@ class RealTimeWebSocketService:
             current_candle = candles[-1]
             current_price = float(current_candle['close'])
             
-            # Generate ML prediction periodically (not every tick)
-            prediction = self.model.predict(symbol)
-            if not isinstance(prediction, dict):
-                return
+            # Skip ML prediction for immediate price updates - use cached if available
+            predicted_price = current_price  # Default to current price
+            forecast_direction = 'HOLD'
+            confidence = 75
             
-            # Generate real-time predicted price
-            predicted_price = float(prediction.get('predicted_price', current_price))
+            # Use cached prediction for immediate updates, generate fresh in background
+            predicted_price = current_price
+            forecast_direction = 'HOLD'
+            confidence = 75
+            
+            # Try cached prediction first for speed
+            try:
+                if hasattr(self.model, 'prediction_cache') and symbol in self.model.prediction_cache:
+                    cache_time, cached_pred = self.model.prediction_cache[symbol]
+                    if (datetime.now().timestamp() - cache_time) < 10:  # Use if less than 10s old
+                        predicted_price = float(cached_pred.get('predicted_price', current_price))
+                        forecast_direction = cached_pred.get('forecast_direction', 'HOLD')
+                        confidence = cached_pred.get('confidence', 75)
+                else:
+                    # Generate fresh prediction in background (non-blocking)
+                    asyncio.create_task(self._generate_fresh_prediction(symbol))
+            except Exception as e:
+                logging.warning(f"Prediction cache failed for {symbol}: {e}")
             
             # Send real-time price update (for live chart updates)
             realtime_data = {
@@ -240,9 +295,9 @@ class RealTimeWebSocketService:
                 "change_24h": float(self.price_cache.get(symbol, {}).get('change_24h', 0)),
                 "volume": float(current_candle['volume']),
                 "timestamp": current_time.strftime("%H:%M"),
-                "forecast_direction": str(prediction.get('forecast_direction', 'HOLD')),
-                "confidence": int(prediction.get('confidence', 50)),
-                "predicted_range": str(prediction.get('predicted_range', f"${current_price*0.98:.2f}–${current_price*1.02:.2f}")),
+                "forecast_direction": str(forecast_direction),
+                "confidence": int(confidence),
+                "predicted_range": f"${predicted_price*0.98:.2f}–${predicted_price*1.02:.2f}",
                 "last_updated": current_time.isoformat()
             }
             
@@ -250,12 +305,11 @@ class RealTimeWebSocketService:
             await self._broadcast_to_timeframe(symbol, timeframe, realtime_data)
             
         except Exception as e:
-            logging.error(f"Error generating realtime update: {e}")
+            ErrorHandler.log_prediction_error('realtime_update', str(e))
     
-    async def _store_realtime_data(self, symbol, price_data, prediction):
-        """Store real-time price and forecast data to database"""
+    async def _store_realtime_data(self, symbol, price_data, timeframe):
+        """Store real-time price data to database for every update"""
         try:
-            # Use same database access pattern
             db = self.database
             if not db or not db.pool:
                 try:
@@ -267,49 +321,18 @@ class RealTimeWebSocketService:
                 except:
                     return
             
-            # Store actual price (with rate limiting - every minute)
-            current_time = datetime.now()
-            if not hasattr(self, 'last_stored') or symbol not in self.last_stored:
-                self.last_stored = {}
+            # Store every price update (no rate limiting)
+            await db.store_actual_price(symbol, price_data, timeframe)
             
-            # Store price data every 30 seconds to avoid database overload
-            if (symbol not in self.last_stored or 
-                (current_time - self.last_stored[symbol]).total_seconds() >= 30):
-                
-                await db.store_actual_price(symbol, price_data)
-                self.last_stored[symbol] = current_time
-                
-                # Invalidate chart cache when new data is stored
-                try:
-                    import redis
-                    import os
-                    from dotenv import load_dotenv
-                    load_dotenv()
-                    
-                    redis_client = redis.Redis(
-                        host=os.getenv('REDIS_HOST', 'localhost'),
-                        port=int(os.getenv('REDIS_PORT', '6379')),
-                        db=int(os.getenv('REDIS_DB', '0'))
-                    )
-                    
-                    # Clear cache for this symbol
-                    redis_client.delete(f"chart_data:{symbol}:7D")
-                    redis_client.delete(f"websocket_history:{symbol}")
-                except:
-                    pass
-            
-            # Store forecast (less frequently - every 2 minutes)
-            if not hasattr(self, 'last_forecast_stored'):
-                self.last_forecast_stored = {}
-            
-            if (symbol not in self.last_forecast_stored or 
-                (current_time - self.last_forecast_stored[symbol]).total_seconds() >= 120):
-                
+            # Generate and store forecast for this timeframe
+            try:
+                prediction = self.model.predict(symbol.split('_')[0])  # Remove timeframe from symbol
                 await db.store_forecast(symbol, prediction)
-                self.last_forecast_stored[symbol] = current_time
+            except Exception as e:
+                logging.warning(f"Failed to generate forecast for {symbol}: {e}")
                 
         except Exception as e:
-            logging.error(f"❌ Failed to store real-time data for {symbol}: {e}")
+            ErrorHandler.log_database_error('store_realtime', symbol, str(e))
     
     async def _broadcast_to_timeframe(self, symbol, timeframe, data):
         """Efficient broadcast with connection pooling and batching"""
@@ -378,7 +401,7 @@ class RealTimeWebSocketService:
         """Send cached historical data with improved caching"""
         try:
             # Multi-level cache: Redis -> Memory -> Database
-            cache_key = f"websocket_history:{symbol}:{timeframe}"
+            cache_key = CacheKeys.websocket_history(symbol, timeframe)
             
             # Check memory cache first (fastest)
             if hasattr(self, 'memory_cache') and cache_key in self.memory_cache:
@@ -498,6 +521,44 @@ class RealTimeWebSocketService:
             logging.error(f"❌ DEBUG: Failed to send historical data for {symbol} {timeframe}: {e}")
             # Don't send anything if database fails
             return
+    
+    async def _store_all_timeframes(self, symbol, price, volume, change_24h):
+        """Store price data for all timeframes regardless of connections"""
+        try:
+            current_time = datetime.now()
+            timeframes = ['1m', '5m', '15m', '1h', '4H', '1D', '1W']
+            
+            for timeframe in timeframes:
+                timeframe_symbol = f"{symbol}_{timeframe}"
+                
+                # Adjust timestamp for different timeframes to prevent duplicates
+                adjusted_time = self._adjust_timestamp_for_timeframe(current_time, timeframe)
+                
+                price_data = {
+                    'current_price': price,
+                    'change_24h': change_24h,
+                    'volume': volume,
+                    'timestamp': adjusted_time
+                }
+                
+                # Store price data
+                await self._store_realtime_data(timeframe_symbol, price_data, timeframe)
+                
+        except Exception as e:
+            ErrorHandler.log_database_error('store_timeframes', symbol, str(e))
+    
+    def _adjust_timestamp_for_timeframe(self, timestamp, timeframe):
+        """Adjust timestamp to prevent duplicates for different timeframes"""
+        from utils.timestamp_utils import TimestampUtils
+        return TimestampUtils.adjust_for_timeframe(timestamp, timeframe)
+    
+    async def _generate_fresh_prediction(self, symbol):
+        """Generate fresh ML prediction in background"""
+        try:
+            prediction = self.model.predict(symbol)
+            # Cache will be updated by model.predict() method
+        except Exception as e:
+            logging.warning(f"Background prediction failed for {symbol}: {e}")
     
     def remove_connection(self, symbol, connection_id):
         """Remove WebSocket connection"""

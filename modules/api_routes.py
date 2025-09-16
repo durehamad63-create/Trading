@@ -10,27 +10,15 @@ import requests
 from datetime import datetime, timedelta
 import io
 from multi_asset_support import multi_asset
-# Database will be passed as parameter
 from rate_limiter import rate_limiter
 from accuracy_validator import accuracy_validator
 from realtime_websocket_service import realtime_service
-try:
-    from async_task_manager import task_manager
-except ImportError:
-    # Fallback if task manager not available
-    class FallbackTaskManager:
-        async def run_batch_tasks(self, tasks):
-            results = []
-            for task_id, coro, args, kwargs in tasks:
-                try:
-                    result = await coro(*args, **kwargs)
-                    results.append(result)
-                except Exception as e:
-                    results.append(e)
-            return results
-        def get_stats(self):
-            return {'status': 'fallback_mode'}
-    task_manager = FallbackTaskManager()
+from utils.cache_manager import CacheKeys
+# Task manager removed - using direct async for simplicity
+class SimpleTaskManager:
+    def get_stats(self):
+        return {'status': 'direct_async'}
+task_manager = SimpleTaskManager()
 
 # Helper functions for WebSocket data
 async def get_real_time_price(symbol: str):
@@ -52,15 +40,8 @@ def setup_routes(app: FastAPI, model, database=None):
     # Load environment variables
     load_dotenv()
     
-    # Import and ensure stock service is available globally
-    try:
-        import stock_realtime_service as stock_module
-        global stock_realtime_service
-        stock_realtime_service = getattr(stock_module, 'stock_realtime_service', None)
-        logging.info(f"✅ Stock service imported: {stock_realtime_service is not None}")
-    except Exception as e:
-        logging.error(f"❌ Failed to import stock service: {e}")
-        stock_realtime_service = None
+    # Stock service will be initialized in main.py lifespan
+    stock_realtime_service = None
     
     db = database  # Use passed database instance
     
@@ -133,6 +114,7 @@ def setup_routes(app: FastAPI, model, database=None):
     @app.get("/api/market/summary")
     async def market_summary(class_filter: str = "crypto", limit: int = 10, request: Request = None):
         start_time = datetime.now()
+        logging.info(f"🔍 DEBUG: Market summary called with class_filter={class_filter}, limit={limit}")
 
         
         if request:
@@ -153,6 +135,7 @@ def setup_routes(app: FastAPI, model, database=None):
             # For 'all', include both crypto and stocks
             symbols = crypto_symbols[:min(limit//2, 5)] + stock_symbols[:min(limit//2, 5)]
         
+        logging.info(f"🔍 DEBUG: Selected symbols: {symbols}")
 
         
         # Use simple concurrent execution for speed
@@ -160,17 +143,18 @@ def setup_routes(app: FastAPI, model, database=None):
         
         async def get_prediction_fast(symbol):
             symbol_start = datetime.now()
+            logging.info(f"🔍 DEBUG: Starting prediction for {symbol}")
             
             # Check Redis cache first, then memory cache
             cached_prediction = None
             if redis_client:
                 try:
-                    cache_key = f"prediction:{symbol}"
+                    cache_key = CacheKeys.prediction(symbol)
                     cached_data = redis_client.get(cache_key)
                     if cached_data:
                         import json
                         cached_prediction = json.loads(cached_data)
-
+                        logging.info(f"✅ DEBUG: Redis cache hit for {symbol}")
                         return cached_prediction
                 except Exception as e:
                     logging.warning(f"❌ Redis cache read failed for {symbol}: {e}")
@@ -179,23 +163,27 @@ def setup_routes(app: FastAPI, model, database=None):
             if symbol in prediction_cache:
                 cache_age = (datetime.now() - prediction_cache[symbol]['timestamp']).total_seconds()
                 if cache_age < cache_timeout:
+                    logging.info(f"✅ DEBUG: Memory cache hit for {symbol}")
                     return prediction_cache[symbol]['data']
             
+            logging.info(f"🔍 DEBUG: No cache hit for {symbol}, calling model.predict()")
             try:
                 prediction = model.predict(symbol)
+                logging.info(f"✅ DEBUG: model.predict() succeeded for {symbol}: {prediction.get('current_price', 'N/A')}")
                 prediction['name'] = multi_asset.get_asset_name(symbol)
                 
                 # Cache in Redis first, then memory with debug logging
                 if redis_client:
                     try:
                         import json
-                        cache_key = f"prediction:{symbol}"
+                        cache_key = CacheKeys.prediction(symbol)
                         redis_client.setex(cache_key, cache_timeout, json.dumps(prediction))
                         # Verify the write worked
                         test_read = redis_client.get(cache_key)
+                        logging.info(f"✅ DEBUG: Cached prediction for {symbol} in Redis")
                     except Exception as e:
                         logging.warning(f"❌ Redis cache write failed for {symbol}: {e}")
-                        redis_client = None  # Disable Redis if it's not working
+                        # Don't set redis_client to None here as it creates UnboundLocalError
                 
                 # Also cache in memory as fallback
                 prediction_cache[symbol] = {
@@ -205,22 +193,33 @@ def setup_routes(app: FastAPI, model, database=None):
                 
                 return prediction
             except Exception as e:
-                logging.warning(f"❌ {symbol} prediction failed in {(datetime.now() - symbol_start).total_seconds():.2f}s: {e}")
+                logging.error(f"❌ DEBUG: model.predict() failed for {symbol} in {(datetime.now() - symbol_start).total_seconds():.2f}s: {e}")
+                logging.error(f"❌ DEBUG: Exception type: {type(e).__name__}")
+                logging.error(f"❌ DEBUG: Exception details: {str(e)}")
                 return None
         
         # Run predictions concurrently without task manager overhead
         tasks = [get_prediction_fast(symbol) for symbol in symbols]
         concurrent_start = datetime.now()
+        logging.info(f"🔍 DEBUG: Running {len(tasks)} prediction tasks concurrently")
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        logging.info(f"🔍 DEBUG: Concurrent tasks completed in {(datetime.now() - concurrent_start).total_seconds():.2f}s")
 
         
         assets = []
-        for result in results:
-            if isinstance(result, dict) and result and 'symbol' in result:
+        for i, result in enumerate(results):
+            symbol = symbols[i]
+            logging.info(f"🔍 DEBUG: Result {i} for {symbol}: type={type(result).__name__}, valid={isinstance(result, dict) and result and 'symbol' in result}")
+            if isinstance(result, Exception):
+                logging.error(f"❌ DEBUG: Exception in result {i} for {symbol}: {result}")
+            elif isinstance(result, dict) and result and 'symbol' in result:
                 assets.append(result)
+                logging.info(f"✅ DEBUG: Added {symbol} to assets list")
+            else:
+                logging.warning(f"⚠️ DEBUG: Invalid result for {symbol}: {result}")
         
         total_time = (datetime.now() - start_time).total_seconds()
-
+        logging.info(f"🔍 DEBUG: Market summary completed in {total_time:.2f}s with {len(assets)} assets out of {len(symbols)} requested")
         
         return {"assets": assets}
 
@@ -715,7 +714,7 @@ def setup_routes(app: FastAPI, model, database=None):
             
             while True:
                 try:
-                    await asyncio.sleep(30)
+                    await asyncio.sleep(5)
                     
                     # Check connection health
                     if hasattr(websocket, 'client_state') and websocket.client_state.name == 'CONNECTED':
@@ -896,7 +895,7 @@ def setup_routes(app: FastAPI, model, database=None):
                     if ping_failures >= max_failures:
                         break
                 
-                await asyncio.sleep(5)  # Update every 5 seconds
+                await asyncio.sleep(1)  # Update every 1 second
                 
         except WebSocketDisconnect:
             logging.info(f"🔌 TRENDS WS: Client disconnected for {symbol}")
@@ -1198,7 +1197,7 @@ def setup_routes(app: FastAPI, model, database=None):
         
         async def get_cached_market_data():
             """Get market data from Redis cache or generate if not cached"""
-            cache_key = "market_summary_data"
+            cache_key = CacheKeys.market_summary()
             
             # Try Redis cache first
             if redis_client:
@@ -1350,7 +1349,7 @@ def setup_routes(app: FastAPI, model, database=None):
                     if ping_failures >= max_failures:
                         break
                 
-                await asyncio.sleep(2)  # Update every 2 seconds
+                await asyncio.sleep(0.5)  # Update every 0.5 seconds
                 
         except WebSocketDisconnect:
             logging.info(f"🔌 DEBUG: Market summary WebSocket disconnected")

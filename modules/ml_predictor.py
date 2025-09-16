@@ -12,6 +12,10 @@ import warnings
 from dotenv import load_dotenv
 from multi_asset_support import multi_asset
 from database import db
+from config.symbols import CRYPTO_SYMBOLS, STOCK_SYMBOLS
+from utils.api_client import APIClient
+from utils.error_handler import ErrorHandler
+from utils.cache_manager import CacheKeys
 
 # Suppress sklearn warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -29,10 +33,10 @@ load_dotenv()
 class MobileMLModel:
     def __init__(self):
         self.last_request_time = {}
-        self.min_request_interval = 0.01  # Reduced to 10ms
+        self.min_request_interval = 0.001  # 1ms for real-time
         self.xgb_model = None
         self.prediction_cache = {}
-        self.cache_ttl = 30  # 30 second cache for better performance
+        self.cache_ttl = 5  # 5 second cache for faster updates
         
         # Load models directly - REQUIRED
         try:
@@ -40,18 +44,7 @@ class MobileMLModel:
             import yfinance as yf
             import requests
             
-            # Ensure APIGenerator class is available
-            import sys
-            if 'APIGenerator' not in globals():
-                # Add APIGenerator to current module if not present
-                class APIGenerator:
-                    def __init__(self, models=None):
-                        self.models = models or {}
-                    def __getstate__(self):
-                        return self.__dict__
-                    def __setstate__(self, state):
-                        self.__dict__.update(state)
-                sys.modules[__name__].APIGenerator = APIGenerator
+
             
             # Use new specialized model
             model_path = os.path.join('models', 'specialized_trading_model.pkl')
@@ -93,7 +86,7 @@ class MobileMLModel:
         """Generate real model prediction with Redis caching"""
         import time
         current_time = time.time()
-        cache_key = f"prediction:{symbol}"
+        cache_key = CacheKeys.prediction(symbol)
         
         # Check Redis cache first
         if self.redis_client:
@@ -311,95 +304,54 @@ class MobileMLModel:
             return []
     
     def _get_real_price(self, symbol):
-        """Get real price from Binance or YFinance - NO FALLBACKS"""
-        # Symbol mapping for APIs
-        binance_symbols = {
-            'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT', 'BNB': 'BNBUSDT',
-            'SOL': 'SOLUSDT', 'ADA': 'ADAUSDT', 'XRP': 'XRPUSDT', 'DOGE': 'DOGEUSDT'
-        }
-        
-        yfinance_symbols = {
-            'BTC': 'BTC-USD', 'ETH': 'ETH-USD', 'BNB': 'BNB-USD',
-            'SOL': 'SOL-USD', 'ADA': 'ADA-USD', 'XRP': 'XRP-USD', 'DOGE': 'DOGE-USD',
-            'USDT': 'USDT-USD', 'USDC': 'USDC-USD', 'TRX': 'TRX-USD',
-            'NVDA': 'NVDA', 'MSFT': 'MSFT', 'AAPL': 'AAPL'
-        }
-        
+        """Get real price from APIs using centralized client"""
         try:
-            # Try Binance first for crypto
-            if symbol in binance_symbols:
-                url = f"https://api.binance.com/api/v3/ticker/price?symbol={binance_symbols[symbol]}"
-                response = requests.get(url, timeout=10)
-                if response.status_code == 200:
-                    price = float(response.json()['price'])
-                    # logging.info(f"🔥 REAL BINANCE: {symbol} = ${price}")
-                    return price
-            
             # Handle stablecoins
-            if symbol in ['USDT', 'USDC']:
-                # logging.info(f"🔥 STABLECOIN: {symbol} = $1.00")
-                return 1.0
+            if symbol in CRYPTO_SYMBOLS and CRYPTO_SYMBOLS[symbol].get('fixed_price'):
+                return CRYPTO_SYMBOLS[symbol]['fixed_price']
             
-            # Add TRX to Binance
-            if symbol == 'TRX':
-                url = f"https://api.binance.com/api/v3/ticker/price?symbol=TRXUSDT"
-                response = requests.get(url, timeout=10)
-                if response.status_code == 200:
-                    price = float(response.json()['price'])
-                    # logging.info(f"🔥 REAL BINANCE: {symbol} = ${price}")
+            # Try Binance for crypto
+            if symbol in CRYPTO_SYMBOLS and CRYPTO_SYMBOLS[symbol].get('binance'):
+                price = APIClient.get_binance_price(CRYPTO_SYMBOLS[symbol]['binance'])
+                if price:
                     return price
             
-            # Use direct Yahoo Finance API for stocks with headers
-            if symbol in ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM']:
-                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
-                response = requests.get(url, timeout=15, headers=headers)
-                if response.status_code == 200:
-                    data = response.json()
-                    if 'chart' in data and data['chart']['result']:
-                        result = data['chart']['result'][0]
-                        price = result['meta']['regularMarketPrice']
-                        # logging.info(f"🔥 REAL STOCK DATA: {symbol} = ${price}")
-                        return price
+            # Try Yahoo for stocks or crypto fallback
+            if symbol in STOCK_SYMBOLS:
+                price = APIClient.get_yahoo_price(STOCK_SYMBOLS[symbol]['yahoo'])
+                if price:
+                    return price
+            elif symbol in CRYPTO_SYMBOLS and CRYPTO_SYMBOLS[symbol].get('yahoo'):
+                price = APIClient.get_yahoo_price(CRYPTO_SYMBOLS[symbol]['yahoo'])
+                if price:
+                    return price
+            
+            raise Exception(f"No price data available for {symbol}")
         except Exception as e:
-            logging.error(f"❌ CRITICAL: REAL DATA FAILED for {symbol}: {e}")
-            raise Exception(f"Cannot get real price data for {symbol} from any API: {str(e)}")
+            ErrorHandler.log_prediction_error(symbol, f"Price fetch failed: {e}")
+            raise
     
     def _get_real_change(self, symbol):
-        """Get real 24h change from APIs"""
-        binance_symbols = {
-            'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT', 'BNB': 'BNBUSDT',
-            'SOL': 'SOLUSDT', 'ADA': 'ADAUSDT', 'XRP': 'XRPUSDT', 
-            'DOGE': 'DOGEUSDT', 'TRX': 'TRXUSDT', 'USDT': 'USDCUSDT', 'USDC': 'USDCUSDT'
-        }
-        
+        """Get real 24h change from APIs using centralized client"""
         try:
-            # Use Binance for all crypto
-            if symbol in binance_symbols:
-                url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={binance_symbols[symbol]}"
-                response = requests.get(url, timeout=10)
-                if response.status_code == 200:
-                    return float(response.json()['priceChangePercent'])
+            # Stablecoins have no change
+            if symbol in CRYPTO_SYMBOLS and CRYPTO_SYMBOLS[symbol].get('fixed_price'):
+                return 0.0
             
-            # Use direct Yahoo Finance API for stocks with headers
-            elif symbol in ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM']:
-                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
-                response = requests.get(url, timeout=15, headers=headers)
-                if response.status_code == 200:
-                    data = response.json()
-                    if 'chart' in data and data['chart']['result']:
-                        result = data['chart']['result'][0]
-                        meta = result['meta']
-                        current_price = meta['regularMarketPrice']
-                        prev_close = meta['previousClose']
-                        return ((current_price - prev_close) / prev_close) * 100
+            # Try Binance for crypto
+            if symbol in CRYPTO_SYMBOLS and CRYPTO_SYMBOLS[symbol].get('binance'):
+                change = APIClient.get_binance_change(CRYPTO_SYMBOLS[symbol]['binance'])
+                if change is not None:
+                    return change
+            
+            # Try Yahoo for stocks or crypto fallback
+            if symbol in STOCK_SYMBOLS:
+                return APIClient.get_yahoo_change(STOCK_SYMBOLS[symbol]['yahoo'])
+            elif symbol in CRYPTO_SYMBOLS and CRYPTO_SYMBOLS[symbol].get('yahoo'):
+                return APIClient.get_yahoo_change(CRYPTO_SYMBOLS[symbol]['yahoo'])
+            
         except Exception as e:
-            logging.warning(f"Change data failed for {symbol}: {e}")
+            ErrorHandler.log_prediction_error(symbol, f"Change fetch failed: {e}")
         return 0.0
     
     def _get_real_historical_prices(self, symbol):

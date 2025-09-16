@@ -7,16 +7,14 @@ import aiohttp
 import logging
 from datetime import datetime, timedelta
 from database import db
+from config.symbols import CRYPTO_SYMBOLS
+from utils.error_handler import ErrorHandler
 
 class GapFillingService:
     def __init__(self, model=None):
         self.model = model  # Use shared model instance
-        self.binance_symbols = {
-            'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT', 'BNB': 'BNBUSDT',
-            'SOL': 'SOLUSDT', 'ADA': 'ADAUSDT', 'XRP': 'XRPUSDT',
-            'DOGE': 'DOGEUSDT', 'TRX': 'TRXUSDT', 'USDT': 'USDTUSDC',
-            'USDC': 'USDCUSDT'
-        }
+        # Use centralized symbol configuration
+        self.binance_symbols = {k: v['binance'] for k, v in CRYPTO_SYMBOLS.items() if v.get('binance')}
     
     async def fill_missing_data(self, db_instance):
         """Fill missing data for all symbols since last stored timestamp"""
@@ -31,10 +29,10 @@ class GapFillingService:
         for symbol in self.binance_symbols.keys():
             try:
                 await self._fill_symbol_gaps(symbol)
-                # Add small delay to prevent overwhelming the system
-                await asyncio.sleep(0.1)
+                # Add delay to prevent API rate limiting
+                await asyncio.sleep(0.5)
             except Exception as e:
-                logging.error(f"❌ Gap filling failed for {symbol}: {e}")
+                ErrorHandler.log_database_error('gap_filling', symbol, str(e))
         
         logging.info("✅ Gap filling completed")
     
@@ -65,8 +63,9 @@ class GapFillingService:
             await self.db.store_historical_batch(symbol, historical_data)
 
             
-            # Generate and store missing forecasts for historical data
-            await self._fill_missing_forecasts(symbol, historical_data)
+            # Skip forecast generation for historical data to improve performance
+            # await self._fill_missing_forecasts(symbol, historical_data)
+            logging.info(f"✅ Filled {len(historical_data)} data points for {symbol}")
     
     async def _fetch_binance_klines(self, symbol, start_time, end_time):
         """Fetch historical klines from Binance API"""
@@ -94,10 +93,10 @@ class GapFillingService:
                         data = await response.json()
                         return self._process_klines(data)
                     else:
-                        logging.error(f"Binance API error for {symbol}: {response.status}")
+                        ErrorHandler.log_api_error('binance', symbol, str(response.status))
                         return []
         except Exception as e:
-            logging.error(f"Failed to fetch {symbol} data: {e}")
+            ErrorHandler.log_api_error('binance_klines', symbol, str(e))
             return []
     
     def _process_klines(self, klines_data):

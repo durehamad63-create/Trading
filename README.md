@@ -401,20 +401,6 @@ TradingApp/
 - **API**: Rate limiting and response caching
 - **ML**: Prediction caching with TTL
 
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create feature branch
-3. Make changes
-4. Test thoroughly
-5. Submit pull request
-
-## 📄 License
-
-This project is licensed under the MIT License.
-
----
-
 ## ⚡ Quick Start Checklist
 
 - [ ] Install Python 3.8+, PostgreSQL, Redis

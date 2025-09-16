@@ -2,21 +2,22 @@
 Multi-asset support for stocks and macro indicators
 """
 import requests
-# Removed yfinance import - using direct API calls
 import numpy as np
 from datetime import datetime, timedelta
 import logging
 import os
 from dotenv import load_dotenv
+from config.symbols import CRYPTO_SYMBOLS, STOCK_SYMBOLS, MACRO_SYMBOLS, SYMBOL_NAMES
+from utils.api_client import APIClient
+from utils.error_handler import ErrorHandler
 
-# Load environment variables
 load_dotenv()
 
 class MultiAssetSupport:
     def __init__(self):
-        self.crypto_symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX']
-        self.stock_symbols = ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM']
-        self.macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
+        self.crypto_symbols = list(CRYPTO_SYMBOLS.keys())
+        self.stock_symbols = list(STOCK_SYMBOLS.keys())
+        self.macro_symbols = list(MACRO_SYMBOLS.keys())
     
     def get_asset_data(self, symbol):
         """Get current price and change for any asset type"""
@@ -30,87 +31,73 @@ class MultiAssetSupport:
             raise Exception(f"Unsupported symbol: {symbol}")
     
     def _get_crypto_data(self, symbol):
-        """Get crypto data from Binance"""
-        symbol_map = {
-            'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT', 'BNB': 'BNBUSDT',
-            'XRP': 'XRPUSDT', 'SOL': 'SOLUSDT', 'DOGE': 'DOGEUSDT', 
-            'ADA': 'ADAUSDT', 'TRX': 'TRXUSDT', 'USDT': 'USDTUSDC',
-            'USDC': 'USDCUSDT'
-        }
-        
-        binance_symbol = symbol_map.get(symbol)
-        if not binance_symbol:
+        """Get crypto data using centralized API client"""
+        if symbol not in CRYPTO_SYMBOLS:
             raise Exception(f"Crypto symbol not supported: {symbol}")
         
-        binance_url = os.getenv('BINANCE_API_URL', 'https://api.binance.com/api/v3')
-        url = f"{binance_url}/ticker/24hr?symbol={binance_symbol}"
-        response = requests.get(url, timeout=10)
+        config = CRYPTO_SYMBOLS[symbol]
         
-        if response.status_code != 200:
-            raise Exception(f"Binance API failed: {response.status_code}")
+        # Handle stablecoins
+        if config.get('fixed_price'):
+            return {
+                'current_price': config['fixed_price'],
+                'change_24h': 0.0,
+                'data_source': 'Fixed Price'
+            }
         
-        data = response.json()
-        return {
-            'current_price': float(data['lastPrice']),
-            'change_24h': float(data['priceChangePercent']),
-            'data_source': 'Binance API'
-        }
+        # Try Binance first
+        if config.get('binance'):
+            price = APIClient.get_binance_price(config['binance'])
+            change = APIClient.get_binance_change(config['binance'])
+            if price:
+                return {
+                    'current_price': price,
+                    'change_24h': change,
+                    'data_source': 'Binance API'
+                }
+        
+        # Fallback to Yahoo
+        if config.get('yahoo'):
+            price = APIClient.get_yahoo_price(config['yahoo'])
+            change = APIClient.get_yahoo_change(config['yahoo'])
+            if price:
+                return {
+                    'current_price': price,
+                    'change_24h': change,
+                    'data_source': 'Yahoo Finance API'
+                }
+        
+        raise Exception(f"No data source available for {symbol}")
     
     def _get_stock_data(self, symbol):
-        """Get stock data using direct Yahoo Finance API"""
-        try:
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-            response = requests.get(url, timeout=10)
-            
-            if response.status_code != 200:
-                raise Exception(f"Yahoo API failed: {response.status_code}")
-            
-            data = response.json()
-            result = data['chart']['result'][0]
-            meta = result['meta']
-            
-            current_price = meta['regularMarketPrice']
-            prev_close = meta['previousClose']
-            change_pct = ((current_price - prev_close) / prev_close) * 100
-            
+        """Get stock data using centralized API client"""
+        if symbol not in STOCK_SYMBOLS:
+            raise Exception(f"Stock symbol not supported: {symbol}")
+        
+        config = STOCK_SYMBOLS[symbol]
+        price = APIClient.get_yahoo_price(config['yahoo'])
+        change = APIClient.get_yahoo_change(config['yahoo'])
+        
+        if price:
             return {
-                'current_price': float(current_price),
-                'change_24h': float(change_pct),
+                'current_price': price,
+                'change_24h': change,
                 'data_source': 'Yahoo Finance API'
             }
-            
-        except Exception as e:
-            logging.error(f"Yahoo Finance API failed for {symbol}: {e}")
-            raise Exception(f"Stock data unavailable for {symbol}: {str(e)}")
+        
+        raise Exception(f"Stock data unavailable for {symbol}")
     
 
     
     def _get_macro_data(self, symbol):
-        """Get macro indicator data"""
-        # Current realistic values for macro indicators
-        current_values = {
-            'GDP': 27000,  # US GDP in billions
-            'CPI': 310.3,  # Consumer Price Index
-            'UNEMPLOYMENT': 3.7,  # Unemployment rate %
-            'FED_RATE': 5.25,     # Federal funds rate %
-            'CONSUMER_CONFIDENCE': 102.0  # Consumer confidence index
-        }
+        """Get macro indicator data using centralized configuration"""
+        if symbol not in MACRO_SYMBOLS:
+            raise Exception(f"Macro symbol not supported: {symbol}")
         
-        # Realistic recent changes
-        recent_changes = {
-            'GDP': 0.1,    # GDP growth
-            'CPI': 0.2,    # Inflation change
-            'UNEMPLOYMENT': -0.1,  # Unemployment change
-            'FED_RATE': 0.0,       # Fed rate stable
-            'CONSUMER_CONFIDENCE': 1.5  # Confidence up
-        }
-        
-        current_value = current_values.get(symbol, 100)
-        change = recent_changes.get(symbol, 0)
-        
+        config = MACRO_SYMBOLS[symbol]
         return {
-            'current_price': current_value,
-            'change_24h': change,
+            'current_price': config['value'],
+            'change_24h': config['change'],
             'data_source': 'Economic Data'
         }
     
@@ -232,22 +219,8 @@ class MultiAssetSupport:
             return f'${predicted_price*0.98:.2f}–${predicted_price*1.02:.2f}'
     
     def get_asset_name(self, symbol):
-        """Get full name for asset"""
-        names = {
-            # Crypto
-            'BTC': 'Bitcoin', 'ETH': 'Ethereum', 'BNB': 'Binance Coin', 'USDT': 'Tether',
-            'XRP': 'Ripple', 'SOL': 'Solana', 'USDC': 'USD Coin', 'DOGE': 'Dogecoin',
-            'ADA': 'Cardano', 'TRX': 'Tron',
-            # Stocks
-            'NVDA': 'NVIDIA', 'MSFT': 'Microsoft', 'AAPL': 'Apple', 'GOOGL': 'Alphabet',
-            'AMZN': 'Amazon', 'META': 'Meta', 'AVGO': 'Broadcom', 'TSLA': 'Tesla',
-            'BRK-B': 'Berkshire Hathaway', 'JPM': 'JPMorgan Chase',
-            # Macro
-            'GDP': 'Gross Domestic Product', 'CPI': 'Consumer Price Index',
-            'UNEMPLOYMENT': 'Unemployment Rate', 'FED_RATE': 'Federal Interest Rate',
-            'CONSUMER_CONFIDENCE': 'Consumer Confidence Index'
-        }
-        return names.get(symbol, symbol)
+        """Get full name for asset using centralized configuration"""
+        return SYMBOL_NAMES.get(symbol, symbol)
 
 # Global instance
 multi_asset = MultiAssetSupport()
