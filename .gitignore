@@ -4,3 +4,4 @@ models/*.pkl
 *.ipynb
 *.html
 requirements of project.txt
+.env

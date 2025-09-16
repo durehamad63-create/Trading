@@ -129,45 +129,7 @@ Search available assets by name or symbol.
 }
 ```
 
-### 5. Batch Predictions
-**POST** `/api/batch_predict/{symbol}`
-
-Generate batch ML predictions with detailed analysis.
-
-**Path Parameters:**
-- `symbol`: Asset symbol
-
-**Request Body:**
-```json
-{
-  "num_points": 24
-}
-```
-
-**Response:**
-```json
-{
-  "symbol": "BTC",
-  "model": "Cached ML Batch Predictions",
-  "predictions": [
-    {
-      "predicted_price": 45500.25,
-      "forecast_direction": "UP",
-      "confidence": 85,
-      "timestamp": "2024-01-01T13:00:00Z"
-    }
-  ],
-  "count": 24,
-  "analysis": {
-    "average_price": 45250.50,
-    "price_range": 1500.75,
-    "variation_percent": 3.32
-  },
-  "generated_at": "2024-01-01T12:45:00Z"
-}
-```
-
-### 6. Export Historical Data
+### 5. Export Historical Data
 **GET** `/api/asset/{symbol}/export`
 
 Exports historical forecast vs. actual data as CSV.
@@ -180,7 +142,7 @@ Exports historical forecast vs. actual data as CSV.
 
 **Response:** CSV file download
 
-### 7. Export Trends Data
+### 6. Export Trends Data
 **GET** `/api/asset/{symbol}/trends/export`
 
 Exports trends historical data as CSV with accuracy metrics.
@@ -193,7 +155,7 @@ Exports trends historical data as CSV with accuracy metrics.
 
 **Response:** CSV file download
 
-### 8. Favorites Management
+### 7. Favorites Management
 
 #### Add Favorite
 **POST** `/api/favorites/{symbol}`
@@ -227,7 +189,7 @@ Exports trends historical data as CSV with accuracy metrics.
 }
 ```
 
-### 9. Accuracy Validation
+### 8. Accuracy Validation
 **POST** `/api/asset/{symbol}/validate`
 
 Validate forecast accuracy for symbol.
@@ -245,7 +207,7 @@ Validate forecast accuracy for symbol.
 }
 ```
 
-### 10. System Health
+### 9. System Health
 **GET** `/api/health`
 
 Comprehensive system health check.
@@ -268,7 +230,7 @@ Comprehensive system health check.
 }
 ```
 
-### 11. System Statistics
+### 10. System Statistics
 
 #### WebSocket Stats
 **GET** `/api/websocket/stats`

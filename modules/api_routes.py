@@ -477,47 +477,7 @@ def setup_routes(app: FastAPI, model, database=None):
             logging.error(f"🔍 DEBUG: Full traceback: {traceback.format_exc()}")
             raise Exception(f"Failed to generate forecast for {symbol} {timeframe}: {str(e)}")
 
-    @app.post("/api/batch_predict/{symbol}")
-    async def batch_predict(symbol: str, request: dict = None):
-        """Generate cached batch ML predictions with detailed analysis"""
-        # Handle both query param and JSON body
-        num_points = 24
-        if request and isinstance(request, dict):
-            num_points = request.get('num_points', 24)
-        
 
-        
-        try:
-            batch_predictions = model.batch_predict(symbol, num_points)
-        except Exception as e:
-            logging.error(f"Batch prediction failed: {e}")
-            return {
-                'symbol': symbol,
-                'error': str(e),
-                'predictions': [],
-                'count': 0
-            }
-        
-        # Analysis
-        prices = [p['predicted_price'] for p in batch_predictions]
-        price_range = max(prices) - min(prices) if prices else 0
-        avg_price = sum(prices) / len(prices) if prices else 0
-        variation_pct = (price_range / avg_price * 100) if avg_price > 0 else 0
-        
-
-        
-        return {
-            'symbol': symbol,
-            'model': 'Cached ML Batch Predictions',
-            'predictions': batch_predictions,
-            'count': len(batch_predictions),
-            'analysis': {
-                'average_price': round(avg_price, 4),
-                'price_range': round(price_range, 4),
-                'variation_percent': round(variation_pct, 2)
-            },
-            'generated_at': datetime.now().isoformat()
-        }
 
     # Enhanced WebSocket connection manager with connection pooling
     class ConnectionManager:
