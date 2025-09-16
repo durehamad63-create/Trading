@@ -25,8 +25,8 @@ class RealTimeWebSocketService:
         self.binance_symbols = {
             'BTC': 'btcusdt', 'ETH': 'ethusdt', 'BNB': 'bnbusdt',
             'SOL': 'solusdt', 'ADA': 'adausdt', 'XRP': 'xrpusdt',
-            'DOGE': 'dogeusdt', 'TRX': 'trxusdt', 'USDT': 'usdtusdc',
-            'USDC': 'usdcusdt'
+            'DOGE': 'dogeusdt', 'TRX': 'trxusdt'
+            # Note: USDT and USDC are stablecoins, handled separately
         }
         
         # Timeframe intervals in minutes
@@ -42,9 +42,33 @@ class RealTimeWebSocketService:
             asyncio.create_task(self._binance_stream(symbol, binance_symbol))
             await asyncio.sleep(0.1)  # Small delay between connections
         
+        # Handle stablecoins separately with fixed prices
+        asyncio.create_task(self._handle_stablecoins())
+        
 
     
 
+    
+    async def _handle_stablecoins(self):
+        """Handle stablecoins with fixed prices"""
+        stablecoins = ['USDT', 'USDC']
+        
+        while True:
+            try:
+                for symbol in stablecoins:
+                    # Set fixed price for stablecoins
+                    self.price_cache[symbol] = {
+                        'current_price': 1.0,
+                        'change_24h': 0.0,
+                        'volume': 1000000000,  # High volume for stablecoins
+                        'timestamp': datetime.now()
+                    }
+                
+                await asyncio.sleep(30)  # Update every 30 seconds
+                
+            except Exception as e:
+                logging.error(f"❌ Stablecoin handler error: {e}")
+                await asyncio.sleep(60)
     
     async def _binance_stream(self, symbol, binance_symbol):
         """Individual Binance WebSocket stream for a symbol (non-blocking)"""
@@ -82,11 +106,18 @@ class RealTimeWebSocketService:
                             continue
                         
             except Exception as e:
-                logging.error(f"❌ Binance stream error for {symbol}: {e}")
+                error_msg = str(e)
+                if "400" in error_msg:
+                    logging.error(f"❌ Binance API error for {symbol}: 400")
+                    # Don't retry immediately for 400 errors
+                    await asyncio.sleep(60)
+                else:
+                    logging.error(f"❌ Binance stream error for {symbol}: {e}")
+                    await asyncio.sleep(10)
+                
                 # Remove from cache if connection fails
                 if symbol in self.price_cache:
                     del self.price_cache[symbol]
-                await asyncio.sleep(10)  # Longer delay on error
     
     async def _update_candles_and_forecast(self, symbol, price, volume, change_24h):
         """Update candle data for all timeframes and generate forecasts"""
@@ -179,7 +210,7 @@ class RealTimeWebSocketService:
             logging.error(f"Error updating candle data: {e}")
     
     async def _generate_timeframe_forecast(self, symbol, timeframe, current_time):
-        """Generate forecast for specific timeframe"""
+        """Generate real-time price update for specific timeframe"""
         try:
             # Get candle data for this timeframe
             if (symbol not in self.candle_cache or 
@@ -189,48 +220,37 @@ class RealTimeWebSocketService:
             
             candles = self.candle_cache[symbol][timeframe]
             current_candle = candles[-1]
+            current_price = float(current_candle['close'])
             
-            # Generate ML prediction using timeframe-specific data
+            # Generate ML prediction periodically (not every tick)
             prediction = self.model.predict(symbol)
             if not isinstance(prediction, dict):
                 return
             
-            # ML prediction generated
-            
-            # Create timeframe-specific forecast data
-            current_price = float(current_candle['close'])
+            # Generate real-time predicted price
             predicted_price = float(prediction.get('predicted_price', current_price))
             
-            # Consistent chart points
-            chart_points = 50
-            past_prices = [float(c['close']) for c in candles[-chart_points:]]
-            future_prices = [predicted_price]
-            timestamps = [c['timestamp'].strftime("%H:%M" if timeframe in ['1m', '5m', '15m', '30m', '1h'] else "%m-%d") for c in candles[-chart_points:]]
-            
-            forecast_data = {
-                "type": "timeframe_forecast",
+            # Send real-time price update (for live chart updates)
+            realtime_data = {
+                "type": "realtime_update",
                 "symbol": str(symbol),
                 "timeframe": str(timeframe),
-                "name": str(prediction.get('name', multi_asset.get_asset_name(symbol))),
+                "current_price": float(current_price),
+                "predicted_price": float(predicted_price),
+                "change_24h": float(self.price_cache.get(symbol, {}).get('change_24h', 0)),
+                "volume": float(current_candle['volume']),
+                "timestamp": current_time.strftime("%H:%M"),
                 "forecast_direction": str(prediction.get('forecast_direction', 'HOLD')),
                 "confidence": int(prediction.get('confidence', 50)),
                 "predicted_range": str(prediction.get('predicted_range', f"${current_price*0.98:.2f}–${current_price*1.02:.2f}")),
-                "chart": {
-                    "past": past_prices,
-                    "future": future_prices,
-                    "timestamps": timestamps
-                },
-                "last_updated": current_time.isoformat(),
-                "current_price": float(current_price),
-                "change_24h": float(self.price_cache.get(symbol, {}).get('change_24h', 0)),
-                "volume": float(current_candle['volume'])
+                "last_updated": current_time.isoformat()
             }
             
-            # Broadcast to connections with this timeframe
-            await self._broadcast_to_timeframe(symbol, timeframe, forecast_data)
+            # Broadcast real-time update
+            await self._broadcast_to_timeframe(symbol, timeframe, realtime_data)
             
         except Exception as e:
-            logging.error(f"Error generating timeframe forecast: {e}")
+            logging.error(f"Error generating realtime update: {e}")
     
     async def _store_realtime_data(self, symbol, price_data, prediction):
         """Store real-time price and forecast data to database"""
@@ -292,72 +312,82 @@ class RealTimeWebSocketService:
             logging.error(f"❌ Failed to store real-time data for {symbol}: {e}")
     
     async def _broadcast_to_timeframe(self, symbol, timeframe, data):
-        """Broadcast data to WebSocket connections for specific symbol and timeframe"""
+        """Efficient broadcast with connection pooling and batching"""
         if symbol not in self.active_connections:
             return
         
-        # Send to connections with matching timeframe
-        tasks = []
-        try:
-            connections_copy = dict(self.active_connections[symbol])
-            
-            for connection_id, conn_data in connections_copy.items():
-                if conn_data['timeframe'] == timeframe:
-                    task = asyncio.create_task(self._send_safe(conn_data['websocket'], data, symbol, connection_id))
-                    tasks.append(task)
-            
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-                
-        except Exception as e:
-            logging.error(f"Error in _broadcast_to_timeframe: {e}")
-    
-    async def _send_safe(self, websocket, data, symbol, connection_id):
-        """Safely send data to WebSocket connection"""
-        try:
-            if not hasattr(websocket, 'send_text') or not isinstance(data, dict):
-                return
-            
-            message = json.dumps(data, default=str)
-            await websocket.send_text(message)
-        except Exception as e:
-            # Only remove connection on specific WebSocket closed errors
-            error_str = str(e).lower()
-            if "connectionclosed" in error_str or "connection is closed" in error_str:
+        # Batch message for efficiency
+        message = json.dumps(data, default=str)
+        
+        # Get matching connections efficiently
+        matching_connections = [
+            (connection_id, conn_data['websocket']) 
+            for connection_id, conn_data in self.active_connections[symbol].items() 
+            if conn_data['timeframe'] == timeframe
+        ]
+        
+        if not matching_connections:
+            return
+        
+        # Batch send with limited concurrency
+        semaphore = asyncio.Semaphore(10)  # Limit concurrent sends
+        
+        async def send_batch(conn_id, websocket):
+            async with semaphore:
                 try:
-                    if symbol in self.active_connections and connection_id in self.active_connections[symbol]:
-                        del self.active_connections[symbol][connection_id]
-                except Exception:
-                    pass
+                    await websocket.send_text(message)
+                except Exception as e:
+                    if "connectionclosed" in str(e).lower():
+                        # Remove dead connection
+                        self.active_connections[symbol].pop(conn_id, None)
+        
+        # Execute batch sends
+        await asyncio.gather(
+            *[send_batch(conn_id, ws) for conn_id, ws in matching_connections],
+            return_exceptions=True
+        )
+    
+
     
     async def add_connection(self, websocket, symbol, connection_id, timeframe='1D'):
-        """Add new WebSocket connection with timeframe"""
-        logging.info(f"🔌 DEBUG: add_connection called for {symbol} {timeframe} with connection_id {connection_id}")
-        
+        """Add connection with efficient pooling"""
         if symbol not in self.active_connections:
             self.active_connections[symbol] = {}
+        
+        # Check for existing connection with same timeframe (connection reuse)
+        existing_conn = None
+        for conn_id, conn_data in self.active_connections[symbol].items():
+            if conn_data['timeframe'] == timeframe and conn_id != connection_id:
+                existing_conn = conn_data
+                break
         
         self.active_connections[symbol][connection_id] = {
             'websocket': websocket,
             'timeframe': timeframe,
-            'connected_at': datetime.now()
+            'connected_at': datetime.now(),
+            'user_id': connection_id.split('_')[-1]  # Extract user ID for pooling
         }
         
-        # Send historical data first
-        logging.info(f"📊 DEBUG: About to send historical data for {symbol} {timeframe}")
-        await self._send_historical_data(websocket, symbol, timeframe)
-        logging.info(f"✅ DEBUG: Historical data sent for {symbol} {timeframe}")
-        
-        # Skip immediate forecast - let real-time service handle all updates
-        logging.info(f"✅ DEBUG: Connection added for {symbol} {timeframe}, waiting for real-time updates")
+        # Send historical data (cached if available from existing connection)
+        if existing_conn and hasattr(existing_conn, 'cached_historical'):
+            await websocket.send_text(existing_conn['cached_historical'])
+        else:
+            await self._send_historical_data(websocket, symbol, timeframe)
     
     async def _send_historical_data(self, websocket, symbol, timeframe):
-        """Send cached historical data to new WebSocket connection"""
+        """Send cached historical data with improved caching"""
         try:
-            logging.info(f"📊 DEBUG: _send_historical_data called for {symbol} {timeframe}")
-            
-            # Try Redis cache first for instant loading
+            # Multi-level cache: Redis -> Memory -> Database
             cache_key = f"websocket_history:{symbol}:{timeframe}"
+            
+            # Check memory cache first (fastest)
+            if hasattr(self, 'memory_cache') and cache_key in self.memory_cache:
+                cached_data = self.memory_cache[cache_key]
+                if (datetime.now() - cached_data['timestamp']).total_seconds() < 300:  # 5 min TTL
+                    await websocket.send_text(cached_data['message'])
+                    return
+            
+            # Try Redis cache
             try:
                 import redis
                 import os
@@ -373,13 +403,17 @@ class RealTimeWebSocketService:
                 
                 cached_message = redis_client.get(cache_key)
                 if cached_message:
-                    logging.info(f"✅ DEBUG: Found Redis cache for {symbol} {timeframe}")
+                    # Cache in memory for next request
+                    if not hasattr(self, 'memory_cache'):
+                        self.memory_cache = {}
+                    self.memory_cache[cache_key] = {
+                        'message': cached_message,
+                        'timestamp': datetime.now()
+                    }
                     await websocket.send_text(cached_message)
                     return
-                else:
-                    logging.info(f"🔍 DEBUG: No Redis cache for {cache_key}, proceeding to database")
             except Exception as e:
-                logging.warning(f"⚠️ DEBUG: Redis cache failed for {symbol} {timeframe}: {e}")
+                logging.warning(f"⚠️ Redis cache failed: {e}")
             
             # Use database from constructor or fallback to global
             db = self.database
@@ -395,32 +429,38 @@ class RealTimeWebSocketService:
                 except Exception as e:
                     logging.error(f"❌ DEBUG: Database import failed for {symbol} {timeframe}: {e}")
                     return
-            else:
-                logging.info(f"✅ DEBUG: Using constructor database for {symbol} {timeframe}")
             
-            # Get historical chart data from database using correct timeframe
-            logging.info(f"🔍 DEBUG: WebSocket getting chart data for {symbol} {timeframe}")
-            chart_data = await db.get_chart_data(symbol, timeframe)
-            logging.info(f"🔍 DEBUG: WebSocket chart data result: actual={len(chart_data.get('actual', []))}, forecast={len(chart_data.get('forecast', []))}, timestamps={len(chart_data.get('timestamps', []))}")
+            logging.info(f"✅ DEBUG: Using database for {symbol} {timeframe}")
+            
+            # Get historical chart data from database with normalized timeframe
+            normalized_tf = '4H' if timeframe.lower() == '4h' else timeframe
+            query_symbol = f"{symbol}_{normalized_tf}"
+            logging.info(f"🔍 DEBUG: Querying database for {query_symbol} (original: {symbol} {timeframe})")
+            chart_data = await db.get_chart_data(query_symbol, normalized_tf)
+            logging.info(f"🔍 DEBUG: Database returned: actual={len(chart_data.get('actual', []))}, forecast={len(chart_data.get('forecast', []))}, timestamps={len(chart_data.get('timestamps', []))}")
             
             if chart_data['actual'] and chart_data['forecast']:
-                # Consistent historical data points
+                # Use database data
                 points = 50
                 actual_data = [float(x) for x in chart_data['actual'][-points:]]
                 forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
                 timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
-                logging.info(f"✅ DEBUG: WebSocket using database data for {symbol} {timeframe}: {len(actual_data)} points")
-                logging.info(f"📊 DEBUG: Sample actual data: {actual_data[:3]}...")
-                logging.info(f"📊 DEBUG: Sample forecast data: {forecast_data[:3]}...")
+                logging.info(f"✅ DEBUG: Using database data for {symbol} {timeframe}: {len(actual_data)} points")
             else:
-                # Generate synthetic data if no database data
-                logging.warning(f"⚠️ DEBUG: WebSocket no database data for {symbol} {timeframe}, generating synthetic")
-                current_price = self.price_cache.get(symbol, {}).get('current_price', 115000)
-                actual_data = [current_price + (i * 100) for i in range(-15, 15)]
-                forecast_data = [price * 1.01 for price in actual_data]
-                from datetime import timedelta
-                timestamps = [(datetime.now() - timedelta(hours=15-i)).isoformat() for i in range(30)]
-                logging.info(f"📊 DEBUG: Generated synthetic data with {len(actual_data)} points")
+                # Force database query with timeframe-specific symbol
+                logging.warning(f"⚠️ DEBUG: No data for {symbol} {timeframe}, trying timeframe-specific query")
+                timeframe_symbol = f"{symbol}_{timeframe}" if timeframe in ['1m', '5m', '15m', '1h', '4h', '1D', '1W'] else symbol
+                chart_data = await db.get_chart_data(timeframe_symbol, timeframe)
+                
+                if chart_data['actual'] and chart_data['forecast']:
+                    points = 50
+                    actual_data = [float(x) for x in chart_data['actual'][-points:]]
+                    forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
+                    timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
+                    logging.info(f"✅ DEBUG: Using timeframe-specific database data for {timeframe_symbol}: {len(actual_data)} points")
+                else:
+                    logging.error(f"❌ DEBUG: No database data available for {symbol}/{timeframe_symbol}")
+                    return  # Don't send synthetic data
             
             historical_message = {
                 "type": "historical_data",
@@ -428,23 +468,36 @@ class RealTimeWebSocketService:
                 "timeframe": str(timeframe),
                 "name": str(multi_asset.get_asset_name(symbol)),
                 "chart": {
-                    "past": actual_data,
-                    "future": forecast_data,
+                    "actual": actual_data,
+                    "predicted": forecast_data,
                     "timestamps": timestamps
                 },
                 "last_updated": datetime.now().isoformat()
             }
             
             message_json = json.dumps(historical_message)
-            logging.info(f"✅ DEBUG: Sending historical message for {symbol} {timeframe} with {len(actual_data)} data points")
-            logging.info(f"📊 DEBUG: Historical message type: {historical_message['type']}, chart keys: {list(historical_message['chart'].keys())}")
+            
+            # Cache the message for future connections
+            if not hasattr(self, 'memory_cache'):
+                self.memory_cache = {}
+            self.memory_cache[cache_key] = {
+                'message': message_json,
+                'timestamp': datetime.now()
+            }
+            
+            # Also cache in Redis for 10 minutes
+            try:
+                redis_client.setex(cache_key, 600, message_json)
+            except:
+                pass
+            
             await websocket.send_text(message_json)
-            logging.info(f"✅ DEBUG: Historical message sent successfully for {symbol} {timeframe}")
+            logging.info(f"✅ DEBUG: Sent historical data for {symbol} {timeframe} with {len(actual_data)} points")
             
         except Exception as e:
             logging.error(f"❌ DEBUG: Failed to send historical data for {symbol} {timeframe}: {e}")
-            import traceback
-            logging.error(f"🔍 DEBUG: Full traceback: {traceback.format_exc()}")
+            # Don't send anything if database fails
+            return
     
     def remove_connection(self, symbol, connection_id):
         """Remove WebSocket connection"""

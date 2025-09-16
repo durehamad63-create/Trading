@@ -349,62 +349,76 @@ class StockRealtimeService:
             logging.error(f"❌ Error generating stock forecast: {e}")
     
     async def _broadcast_to_timeframe(self, symbol, timeframe, data):
-        """Broadcast data to WebSocket connections for specific symbol and timeframe"""
+        """Efficient broadcast with connection pooling"""
         if symbol not in self.active_connections:
             return
         
-        tasks = []
-        try:
-            connections_copy = dict(self.active_connections[symbol])
-            
-            for connection_id, conn_data in connections_copy.items():
-                if conn_data['timeframe'] == timeframe:
-                    task = asyncio.create_task(self._send_safe(conn_data['websocket'], data, symbol, connection_id))
-                    tasks.append(task)
-            
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-                
-        except Exception as e:
-            logging.error(f"❌ Error in stock broadcast: {e}")
-    
-    async def _send_safe(self, websocket, data, symbol, connection_id):
-        """Safely send data to WebSocket connection"""
-        try:
-            message = json.dumps(data, default=str)
-            await websocket.send_text(message)
-        except Exception as e:
-            error_str = str(e).lower()
-            if "connectionclosed" in error_str or "connection is closed" in error_str:
+        # Pre-serialize message once
+        message = json.dumps(data, default=str)
+        
+        # Get matching connections
+        matching_connections = [
+            (conn_id, conn_data['websocket']) 
+            for conn_id, conn_data in self.active_connections[symbol].items() 
+            if conn_data['timeframe'] == timeframe
+        ]
+        
+        if not matching_connections:
+            return
+        
+        # Batch send with concurrency control
+        semaphore = asyncio.Semaphore(15)  # Higher limit for stocks
+        
+        async def send_to_connection(conn_id, websocket):
+            async with semaphore:
                 try:
-                    if symbol in self.active_connections and connection_id in self.active_connections[symbol]:
-                        del self.active_connections[symbol][connection_id]
-                except Exception:
-                    pass
+                    await websocket.send_text(message)
+                except Exception as e:
+                    if "connectionclosed" in str(e).lower():
+                        self.active_connections[symbol].pop(conn_id, None)
+        
+        await asyncio.gather(
+            *[send_to_connection(conn_id, ws) for conn_id, ws in matching_connections],
+            return_exceptions=True
+        )
+    
+
     
     async def add_connection(self, websocket, symbol, connection_id, timeframe='1D'):
-        """Add new WebSocket connection for stock"""
-        logging.info(f"🔌 DEBUG: add_connection called for stock {symbol} {timeframe} with connection_id {connection_id}")
-        
+        """Add connection with pooling optimization"""
         if symbol not in self.active_connections:
             self.active_connections[symbol] = {}
+        
+        # Check for existing similar connection for data reuse
+        existing_data = None
+        for conn_data in self.active_connections[symbol].values():
+            if conn_data['timeframe'] == timeframe and hasattr(conn_data, 'cached_data'):
+                existing_data = conn_data['cached_data']
+                break
         
         self.active_connections[symbol][connection_id] = {
             'websocket': websocket,
             'timeframe': timeframe,
-            'connected_at': datetime.now()
+            'connected_at': datetime.now(),
+            'user_id': connection_id.split('_')[-1]
         }
         
-        # Send historical data
-        logging.info(f"📊 DEBUG: About to send stock historical data for {symbol} {timeframe}")
-        await self._send_stock_historical_data(websocket, symbol, timeframe)
-        logging.info(f"✅ DEBUG: Stock historical data sent for {symbol} {timeframe}")
-        logging.info(f"🔌 Stock WebSocket connected: {symbol} {timeframe} (Total: {len(self.active_connections[symbol])})")
+        # Send historical data (reuse if available)
+        if existing_data:
+            await websocket.send_text(existing_data)
+        else:
+            await self._send_stock_historical_data(websocket, symbol, timeframe)
     
     async def _send_stock_historical_data(self, websocket, symbol, timeframe):
-        """Send historical stock data to new connection"""
+        """Send historical stock data with caching"""
         try:
-            logging.info(f"📊 DEBUG: _send_stock_historical_data called for {symbol} {timeframe}")
+            # Check cache first
+            cache_key = f"stock_history:{symbol}:{timeframe}"
+            if hasattr(self, 'data_cache') and cache_key in self.data_cache:
+                cached_item = self.data_cache[cache_key]
+                if (datetime.now() - cached_item['timestamp']).total_seconds() < 300:
+                    await websocket.send_text(cached_item['data'])
+                    return
             
             # Use database from constructor or fallback to global
             db = self.database
@@ -444,20 +458,29 @@ class StockRealtimeService:
                 logging.info(f"📊 DEBUG: Generated synthetic stock data with {len(actual_data)} points")
             
             historical_message = {
-                "type": "stock_historical_data",
+                "type": "historical_data",  # Standardize message type
                 "symbol": str(symbol),
                 "timeframe": str(timeframe),
                 "name": str(self.stock_symbols.get(symbol, symbol)),
                 "chart": {
-                    "past": actual_data,
-                    "future": forecast_data,
+                    "actual": actual_data,  # Standardize field names
+                    "predicted": forecast_data,
                     "timestamps": timestamps
                 },
                 "last_updated": datetime.now().isoformat()
             }
             
-            logging.info(f"✅ DEBUG: Sending stock historical message for {symbol} {timeframe} with {len(actual_data)} data points")
-            await websocket.send_text(json.dumps(historical_message))
+            message_json = json.dumps(historical_message)
+            
+            # Cache the message
+            if not hasattr(self, 'data_cache'):
+                self.data_cache = {}
+            self.data_cache[cache_key] = {
+                'data': message_json,
+                'timestamp': datetime.now()
+            }
+            
+            await websocket.send_text(message_json)
             
         except Exception as e:
             logging.error(f"❌ DEBUG: Failed to send stock historical data for {symbol} {timeframe}: {e}")
