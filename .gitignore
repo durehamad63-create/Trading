@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+models/*.pkl
+*.ipynb
+*.html
+requirements of project.txt
