@@ -5,3 +5,5 @@ models/*.pkl
 *.html
 requirements of project.txt
 .env
+test_all_assets.py
+test_results.json
