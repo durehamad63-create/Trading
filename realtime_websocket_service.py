@@ -460,8 +460,11 @@ class RealTimeWebSocketService:
                 redis_client = redis.Redis(
                     host=os.getenv('REDIS_HOST', 'localhost'),
                     port=int(os.getenv('REDIS_PORT', '6379')),
-                    db=int(os.getenv('REDIS_DB', '0')),
-                    decode_responses=True
+                    db=0,  # Use DB 0 for Railway compatibility (unified)
+                    password=os.getenv('REDIS_PASSWORD', None) if os.getenv('REDIS_PASSWORD') else None,
+                    decode_responses=True,
+                    socket_connect_timeout=10,
+                    socket_timeout=10
                 )
                 
                 cached_message = redis_client.get(cache_key)

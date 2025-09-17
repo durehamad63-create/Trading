@@ -213,9 +213,11 @@ def setup_routes(app: FastAPI, model, database=None):
         
         if class_filter == "crypto":
             if realtime_service and hasattr(realtime_service, 'price_cache'):
+                print(f"📊 Crypto cache has {len(realtime_service.price_cache)} symbols: {list(realtime_service.price_cache.keys())}")
                 for symbol in symbols:
                     if symbol in realtime_service.price_cache:
                         price_data = realtime_service.price_cache[symbol]
+                        print(f"✅ Adding crypto: {symbol} = ${price_data['current_price']:.2f}")
                         assets.append({
                             'symbol': symbol,
                             'name': multi_asset.get_asset_name(symbol),
@@ -225,14 +227,17 @@ def setup_routes(app: FastAPI, model, database=None):
                             'forecast_direction': 'UP' if price_data['change_24h'] > 1 else 'DOWN' if price_data['change_24h'] < -1 else 'HOLD',
                             'confidence': min(80, max(60, 70 + abs(price_data['change_24h']))),
                             'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
-                            'data_source': 'Binance Stream'
+                            'data_source': 'Binance Stream',
+                            'asset_class': 'crypto'
                         })
         
         elif class_filter == "stocks":
             if stock_realtime_service and hasattr(stock_realtime_service, 'price_cache'):
+                print(f"💹 Stock cache has {len(stock_realtime_service.price_cache)} symbols: {list(stock_realtime_service.price_cache.keys())}")
                 for symbol in symbols:
                     if symbol in stock_realtime_service.price_cache:
                         price_data = stock_realtime_service.price_cache[symbol]
+                        print(f"✅ Adding stock: {symbol} = ${price_data['current_price']:.2f}")
                         assets.append({
                             'symbol': symbol,
                             'name': stock_realtime_service.stock_symbols.get(symbol, symbol),
@@ -242,8 +247,13 @@ def setup_routes(app: FastAPI, model, database=None):
                             'forecast_direction': 'UP' if price_data['change_24h'] > 0.5 else 'DOWN' if price_data['change_24h'] < -0.5 else 'HOLD',
                             'confidence': min(85, max(65, 75 + abs(price_data['change_24h']))),
                             'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
-                            'data_source': price_data.get('data_source', 'Stock API')
+                            'data_source': price_data.get('data_source', 'Stock API'),
+                            'asset_class': 'stocks'
                         })
+            
+            # If no stock data available, return empty (don't fallback to crypto)
+            if not assets:
+                print("⚠️ No stock data available in cache")
         
         elif class_filter == "macro":
             if macro_realtime_service and hasattr(macro_realtime_service, 'price_cache'):
@@ -274,9 +284,10 @@ def setup_routes(app: FastAPI, model, database=None):
                         })
         
         else:  # "all" case
-            # Add crypto assets
+            # Add crypto assets (exclude stablecoins for mixed view)
             if realtime_service and hasattr(realtime_service, 'price_cache'):
-                for symbol in crypto_symbols[:min(limit//2, 5)]:
+                crypto_for_all = [s for s in crypto_symbols[:min(limit//2, 5)] if s not in ['USDT', 'USDC']]
+                for symbol in crypto_for_all:
                     if symbol in realtime_service.price_cache:
                         price_data = realtime_service.price_cache[symbol]
                         assets.append({
@@ -288,7 +299,8 @@ def setup_routes(app: FastAPI, model, database=None):
                             'forecast_direction': 'UP' if price_data['change_24h'] > 1 else 'DOWN' if price_data['change_24h'] < -1 else 'HOLD',
                             'confidence': min(80, max(60, 70 + abs(price_data['change_24h']))),
                             'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
-                            'data_source': 'Binance Stream'
+                            'data_source': 'Binance Stream',
+                            'asset_class': 'crypto'
                         })
             
             # Add stock assets
@@ -305,7 +317,8 @@ def setup_routes(app: FastAPI, model, database=None):
                             'forecast_direction': 'UP' if price_data['change_24h'] > 0.5 else 'DOWN' if price_data['change_24h'] < -0.5 else 'HOLD',
                             'confidence': min(85, max(65, 75 + abs(price_data['change_24h']))),
                             'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
-                            'data_source': price_data.get('data_source', 'Stock API')
+                            'data_source': price_data.get('data_source', 'Stock API'),
+                            'asset_class': 'stocks'
                         })
         
         return {"assets": assets}
