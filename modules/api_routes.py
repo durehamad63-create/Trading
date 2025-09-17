@@ -212,14 +212,12 @@ def setup_routes(app: FastAPI, model, database=None):
         assets = []
         
         if class_filter == "crypto":
+            print(f"🔍 CRYPTO REQUEST - Service: {realtime_service is not None}")
             if realtime_service and hasattr(realtime_service, 'price_cache'):
-                print(f"📊 Crypto cache has {len(realtime_service.price_cache)} symbols: {list(realtime_service.price_cache.keys())}")
+                print(f"🔍 CRYPTO CACHE - Size: {len(realtime_service.price_cache)}, Keys: {list(realtime_service.price_cache.keys())}")
                 for symbol in symbols:
-                    if symbol in realtime_service.price_cache:
+                    if symbol in realtime_service.price_cache and symbol in crypto_symbols:
                         price_data = realtime_service.price_cache[symbol]
-                        # Only add if it's actually a crypto symbol and has real data
-                        if symbol in crypto_symbols:
-                            print(f"✅ Adding crypto: {symbol} = ${price_data['current_price']:.2f}")
                             assets.append({
                                 'symbol': symbol,
                                 'name': multi_asset.get_asset_name(symbol),
@@ -232,14 +230,15 @@ def setup_routes(app: FastAPI, model, database=None):
                                 'data_source': 'Binance Stream',
                                 'asset_class': 'crypto'
                             })
+            print(f"🔍 CRYPTO RESULT - Found {len(assets)} assets")
         
         elif class_filter == "stocks":
+            print(f"🔍 STOCK REQUEST - Service: {stock_realtime_service is not None}")
             if stock_realtime_service and hasattr(stock_realtime_service, 'price_cache'):
-                print(f"💹 Stock cache has {len(stock_realtime_service.price_cache)} symbols: {list(stock_realtime_service.price_cache.keys())}")
+                print(f"🔍 STOCK CACHE - Size: {len(stock_realtime_service.price_cache)}, Keys: {list(stock_realtime_service.price_cache.keys())}")
                 for symbol in symbols:
                     if symbol in stock_realtime_service.price_cache and symbol in stock_symbols:
                         price_data = stock_realtime_service.price_cache[symbol]
-                        print(f"✅ Adding stock: {symbol} = ${price_data['current_price']:.2f}")
                         assets.append({
                             'symbol': symbol,
                             'name': stock_realtime_service.stock_symbols.get(symbol, symbol),
@@ -252,9 +251,7 @@ def setup_routes(app: FastAPI, model, database=None):
                             'data_source': price_data.get('data_source', 'Stock API'),
                             'asset_class': 'stocks'
                         })
-            
-            if not assets:
-                print("⚠️ No stock data available - stock service may not be running")
+            print(f"🔍 STOCK RESULT - Found {len(assets)} assets")
         
         elif class_filter == "macro":
             if macro_realtime_service and hasattr(macro_realtime_service, 'price_cache'):
@@ -1045,6 +1042,89 @@ def setup_routes(app: FastAPI, model, database=None):
             "validation": validation_result,
             "timestamp": datetime.now().isoformat()
         }
+    
+    @app.post("/api/debug/populate-cache")
+    async def populate_cache_debug():
+        """Debug endpoint to manually populate cache data"""
+        try:
+            # Populate crypto cache
+            if realtime_service:
+                test_cryptos = {
+                    'BTC': {'current_price': 43250.50, 'change_24h': 2.5, 'volume': 28500000000, 'timestamp': datetime.now()},
+                    'ETH': {'current_price': 2650.75, 'change_24h': 1.8, 'volume': 15200000000, 'timestamp': datetime.now()},
+                    'BNB': {'current_price': 315.20, 'change_24h': -0.5, 'volume': 1800000000, 'timestamp': datetime.now()},
+                    'SOL': {'current_price': 98.45, 'change_24h': 3.2, 'volume': 2100000000, 'timestamp': datetime.now()},
+                    'XRP': {'current_price': 0.52, 'change_24h': -1.1, 'volume': 1200000000, 'timestamp': datetime.now()}
+                }
+                
+                for symbol, data in test_cryptos.items():
+                    realtime_service.price_cache[symbol] = data
+                    # Also cache in Redis
+                    if realtime_service.redis_client:
+                        try:
+                            cache_key = f"stream:{symbol}:price"
+                            realtime_service.redis_client.setex(cache_key, 300, json.dumps(data, default=str))
+                        except Exception:
+                            pass
+            
+            # Populate macro cache
+            if macro_realtime_service:
+                test_macros = {
+                    'GDP': {'current_price': 27500, 'change_24h': 0.1, 'volume': 1000000, 'unit': 'B', 'timestamp': datetime.now()},
+                    'CPI': {'current_price': 310.8, 'change_24h': 0.2, 'volume': 1000000, 'unit': '', 'timestamp': datetime.now()},
+                    'UNEMPLOYMENT': {'current_price': 3.6, 'change_24h': -0.1, 'volume': 1000000, 'unit': '%', 'timestamp': datetime.now()},
+                    'FED_RATE': {'current_price': 5.25, 'change_24h': 0.0, 'volume': 1000000, 'unit': '%', 'timestamp': datetime.now()},
+                    'CONSUMER_CONFIDENCE': {'current_price': 103.2, 'change_24h': 1.2, 'volume': 1000000, 'unit': '', 'timestamp': datetime.now()}
+                }
+                
+                for symbol, data in test_macros.items():
+                    macro_realtime_service.price_cache[symbol] = data
+                    # Also cache in Redis
+                    if macro_realtime_service.redis_client:
+                        try:
+                            cache_key = f"macro:{symbol}:price"
+                            macro_realtime_service.redis_client.setex(cache_key, 300, json.dumps(data, default=str))
+                        except Exception:
+                            pass
+            
+            return {
+                "success": True,
+                "message": "Cache populated with test data",
+                "crypto_count": len(realtime_service.price_cache) if realtime_service else 0,
+                "stock_count": len(stock_realtime_service.price_cache) if stock_realtime_service else 0,
+                "macro_count": len(macro_realtime_service.price_cache) if macro_realtime_service else 0
+            }
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    @app.get("/api/debug/cache-status")
+    async def cache_status_debug():
+        """Debug endpoint to check cache status"""
+        try:
+            status = {
+                "crypto_cache": {
+                    "service_available": realtime_service is not None,
+                    "cache_size": len(realtime_service.price_cache) if realtime_service else 0,
+                    "symbols": list(realtime_service.price_cache.keys()) if realtime_service else [],
+                    "redis_available": hasattr(realtime_service, 'redis_client') and realtime_service.redis_client is not None if realtime_service else False
+                },
+                "stock_cache": {
+                    "service_available": stock_realtime_service is not None,
+                    "cache_size": len(stock_realtime_service.price_cache) if stock_realtime_service else 0,
+                    "symbols": list(stock_realtime_service.price_cache.keys()) if stock_realtime_service else [],
+                    "redis_available": hasattr(stock_realtime_service, 'redis_client') and stock_realtime_service.redis_client is not None if stock_realtime_service else False
+                },
+                "macro_cache": {
+                    "service_available": macro_realtime_service is not None,
+                    "cache_size": len(macro_realtime_service.price_cache) if macro_realtime_service else 0,
+                    "symbols": list(macro_realtime_service.price_cache.keys()) if macro_realtime_service else [],
+                    "redis_available": hasattr(macro_realtime_service, 'redis_client') and macro_realtime_service.redis_client is not None if macro_realtime_service else False
+                }
+            }
+            return status
+        except Exception as e:
+            return {"error": str(e)}
     
     @app.get("/api/health")
     async def health_check():

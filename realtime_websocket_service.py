@@ -76,6 +76,9 @@ class RealTimeWebSocketService:
         
         # Handle stablecoins separately with fixed prices
         asyncio.create_task(self._handle_stablecoins())
+        
+        # Add fallback data fetcher for failed WebSocket connections
+        asyncio.create_task(self._fallback_data_fetcher())
     async def _handle_stablecoins(self):
         """Handle stablecoins with fixed prices"""
         stablecoins = ['USDT', 'USDC']
@@ -104,7 +107,15 @@ class RealTimeWebSocketService:
         
         while True:
             try:
-                async with websockets.connect(uri) as websocket:
+                # Railway-compatible WebSocket settings
+                async with websockets.connect(
+                    uri, 
+                    ping_interval=20,
+                    ping_timeout=10,
+                    close_timeout=10,
+                    max_size=2**20,
+                    compression=None
+                ) as websocket:
                     print(f"✅ Connected: {symbol} stream active (Binance: {binance_symbol})")
                     async for message in websocket:
                         try:
@@ -152,23 +163,21 @@ class RealTimeWebSocketService:
             except Exception as e:
                 error_msg = str(e)
                 print(f"❌ {symbol} stream error: {error_msg}")
-                if "400" in error_msg:
-                    ErrorHandler.log_api_error('binance', symbol, '400')
+                
+                # Railway-specific error handling
+                if "403" in error_msg or "forbidden" in error_msg.lower():
+                    print(f"🚫 {symbol}: Binance blocked connection, using fallback")
+                    await self._fallback_crypto_data(symbol, binance_symbol)
+                    await asyncio.sleep(30)
+                elif "timeout" in error_msg.lower() or "connection" in error_msg.lower():
+                    print(f"⏰ {symbol}: Connection timeout, retrying...")
                     await asyncio.sleep(5)
                 elif "429" in error_msg:
-                    ErrorHandler.log_api_error('binance', symbol, '429')
-                    await asyncio.sleep(10)
-                elif "connection" in error_msg.lower():
-                    ErrorHandler.log_stream_error('binance', symbol, f'Connection failed - {e}')
-                    await asyncio.sleep(3)
+                    print(f"🚦 {symbol}: Rate limited, waiting...")
+                    await asyncio.sleep(15)
                 else:
-                    ErrorHandler.log_stream_error('binance', symbol, str(e))
-                    await asyncio.sleep(1)
-                
-                # Remove from cache if connection fails
-                if symbol in self.price_cache:
-                    del self.price_cache[symbol]
-                    print(f"🗑️ Removed {symbol} from cache due to connection failure")
+                    print(f"🔄 {symbol}: General error, retrying...")
+                    await asyncio.sleep(3)
     
     async def _update_candles_and_forecast(self, symbol, price, volume, change_24h):
         """Update candle data for all timeframes and generate forecasts"""
