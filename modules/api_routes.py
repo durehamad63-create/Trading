@@ -113,10 +113,6 @@ def setup_routes(app: FastAPI, model, database=None):
     
     @app.get("/api/market/summary")
     async def market_summary(class_filter: str = "crypto", limit: int = 10, request: Request = None):
-        start_time = datetime.now()
-        logging.info(f"🔍 DEBUG: Market summary called with class_filter={class_filter}, limit={limit}")
-
-        
         if request:
             await rate_limiter.check_rate_limit(request)
         """Get market summary with real predictions for crypto, stocks, and macro"""
@@ -135,55 +131,39 @@ def setup_routes(app: FastAPI, model, database=None):
             # For 'all', include both crypto and stocks
             symbols = crypto_symbols[:min(limit//2, 5)] + stock_symbols[:min(limit//2, 5)]
         
-        logging.info(f"🔍 DEBUG: Selected symbols: {symbols}")
-
-        
         # Use simple concurrent execution for speed
         import asyncio
         
         async def get_prediction_fast(symbol):
-            symbol_start = datetime.now()
-            logging.info(f"🔍 DEBUG: Starting prediction for {symbol}")
-            
             # Check Redis cache first, then memory cache
-            cached_prediction = None
             if redis_client:
                 try:
                     cache_key = CacheKeys.prediction(symbol)
                     cached_data = redis_client.get(cache_key)
                     if cached_data:
                         import json
-                        cached_prediction = json.loads(cached_data)
-                        logging.info(f"✅ DEBUG: Redis cache hit for {symbol}")
-                        return cached_prediction
-                except Exception as e:
-                    logging.warning(f"❌ Redis cache read failed for {symbol}: {e}")
+                        return json.loads(cached_data)
+                except Exception:
+                    pass
             
             # Fallback to memory cache
             if symbol in prediction_cache:
                 cache_age = (datetime.now() - prediction_cache[symbol]['timestamp']).total_seconds()
                 if cache_age < cache_timeout:
-                    logging.info(f"✅ DEBUG: Memory cache hit for {symbol}")
                     return prediction_cache[symbol]['data']
             
-            logging.info(f"🔍 DEBUG: No cache hit for {symbol}, calling model.predict()")
             try:
                 prediction = model.predict(symbol)
-                logging.info(f"✅ DEBUG: model.predict() succeeded for {symbol}: {prediction.get('current_price', 'N/A')}")
                 prediction['name'] = multi_asset.get_asset_name(symbol)
                 
-                # Cache in Redis first, then memory with debug logging
+                # Cache in Redis first, then memory
                 if redis_client:
                     try:
                         import json
                         cache_key = CacheKeys.prediction(symbol)
                         redis_client.setex(cache_key, cache_timeout, json.dumps(prediction))
-                        # Verify the write worked
-                        test_read = redis_client.get(cache_key)
-                        logging.info(f"✅ DEBUG: Cached prediction for {symbol} in Redis")
-                    except Exception as e:
-                        logging.warning(f"❌ Redis cache write failed for {symbol}: {e}")
-                        # Don't set redis_client to None here as it creates UnboundLocalError
+                    except Exception:
+                        pass
                 
                 # Also cache in memory as fallback
                 prediction_cache[symbol] = {
@@ -193,47 +173,29 @@ def setup_routes(app: FastAPI, model, database=None):
                 
                 return prediction
             except Exception as e:
-                logging.error(f"❌ DEBUG: model.predict() failed for {symbol} in {(datetime.now() - symbol_start).total_seconds():.2f}s: {e}")
-                logging.error(f"❌ DEBUG: Exception type: {type(e).__name__}")
-                logging.error(f"❌ DEBUG: Exception details: {str(e)}")
+                logging.error(f"Prediction failed for {symbol}: {e}")
                 return None
         
-        # Run predictions concurrently without task manager overhead
+        # Run predictions concurrently
         tasks = [get_prediction_fast(symbol) for symbol in symbols]
-        concurrent_start = datetime.now()
-        logging.info(f"🔍 DEBUG: Running {len(tasks)} prediction tasks concurrently")
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        logging.info(f"🔍 DEBUG: Concurrent tasks completed in {(datetime.now() - concurrent_start).total_seconds():.2f}s")
-
         
         assets = []
         for i, result in enumerate(results):
-            symbol = symbols[i]
-            logging.info(f"🔍 DEBUG: Result {i} for {symbol}: type={type(result).__name__}, valid={isinstance(result, dict) and result and 'symbol' in result}")
-            if isinstance(result, Exception):
-                logging.error(f"❌ DEBUG: Exception in result {i} for {symbol}: {result}")
-            elif isinstance(result, dict) and result and 'symbol' in result:
+            if isinstance(result, dict) and result and 'symbol' in result:
                 assets.append(result)
-                logging.info(f"✅ DEBUG: Added {symbol} to assets list")
-            else:
-                logging.warning(f"⚠️ DEBUG: Invalid result for {symbol}: {result}")
-        
-        total_time = (datetime.now() - start_time).total_seconds()
-        logging.info(f"🔍 DEBUG: Market summary completed in {total_time:.2f}s with {len(assets)} assets out of {len(symbols)} requested")
         
         return {"assets": assets}
 
     @app.get("/api/asset/{symbol}/trends")
     async def asset_trends(symbol: str, timeframe: str = "7D", view: str = "chart"):
         """Get historical trends and accuracy"""
-        logging.info(f"🔍 TRENDS API: {symbol} {timeframe} {view}")
         
         # Map timeframes to periods
         timeframe_periods = {"1W": 168, "7D": 168, "1M": 720, "1Y": 8760, "5Y": 43800}
         periods = timeframe_periods.get(timeframe, 168)
         
         prediction = model.predict(symbol)
-        logging.info(f"📊 TRENDS: Got prediction for {symbol}: {prediction}")
         
         if view == "chart":
             try:
@@ -249,7 +211,6 @@ def setup_routes(app: FastAPI, model, database=None):
                     timestamps.append(timestamp.strftime('%H:%M'))
                 
                 accuracy = min(85, max(60, 75 + abs(prediction['change_24h'])))
-                logging.info(f"📈 TRENDS CHART: {symbol} accuracy={accuracy}%, {len(actual_prices)} data points")
                 
                 return {
                     'symbol': symbol,
@@ -261,7 +222,6 @@ def setup_routes(app: FastAPI, model, database=None):
                     }
                 }
             except Exception as e:
-                logging.error(f"❌ TRENDS CHART ERROR: {symbol} - {str(e)}")
                 raise Exception(f"Cannot load historical data for {symbol}: {str(e)}")
         else:
             try:
@@ -279,10 +239,8 @@ def setup_routes(app: FastAPI, model, database=None):
                             'result': record['result']
                         })
                 
-                logging.info(f"📋 TRENDS TABLE: {symbol} accuracy={accuracy}%, {len(history)} history records")
                 return {'symbol': symbol, 'accuracy': accuracy, 'history': history}
             except Exception as e:
-                logging.error(f"❌ TRENDS TABLE ERROR: {symbol} - {str(e)}")
                 accuracy = min(85, max(60, 75 + abs(prediction['change_24h'])))
                 return {'symbol': symbol, 'accuracy': accuracy, 'history': []}
 
@@ -323,9 +281,6 @@ def setup_routes(app: FastAPI, model, database=None):
     @app.get("/api/asset/{symbol}/forecast")
     async def asset_forecast(symbol: str, timeframe: str = "1D"):
         """Get detailed forecast for symbol"""
-        forecast_start = datetime.now()
-
-        
         try:
             # Use cached prediction if available
             if symbol in prediction_cache:
@@ -346,28 +301,14 @@ def setup_routes(app: FastAPI, model, database=None):
             # Normalize timeframe for database query (4h -> 4H)
             normalized_timeframe = '4H' if timeframe.lower() == '4h' else timeframe
             timeframe_symbol = f"{symbol}_{normalized_timeframe}"
-            logging.info(f"🔍 DEBUG: Forecast request for {symbol} timeframe={timeframe}, timeframe_symbol={timeframe_symbol}")
             
             try:
                 if not db or not db.pool:
-                    logging.error(f"❌ DEBUG: Database not available for {symbol} {timeframe}")
                     raise Exception("Database not available")
                 
-                # Get actual prices from database for specific timeframe (optimized query)
+                # Get actual prices from database for specific timeframe
                 async with db.pool.acquire() as conn:
-                    # Reduced data points for all timeframes
                     limit = 50
-                    logging.info(f"🔍 DEBUG: Querying actual_prices for {timeframe_symbol} with limit {limit}")
-                    
-                    # First check what symbols exist in the database
-                    symbol_check = await conn.fetch("""
-                        SELECT DISTINCT symbol, COUNT(*) as count
-                        FROM actual_prices
-                        WHERE symbol LIKE $1
-                        GROUP BY symbol
-                        ORDER BY count DESC
-                    """, f"{symbol}%")
-                    logging.info(f"🔍 DEBUG: Available symbols for {symbol}: {[(row['symbol'], row['count']) for row in symbol_check]}")
                     
                     actual_rows = await conn.fetch("""
                         SELECT price, timestamp
@@ -376,18 +317,13 @@ def setup_routes(app: FastAPI, model, database=None):
                         ORDER BY timestamp DESC
                         LIMIT $2
                     """, timeframe_symbol, limit)
-                    logging.info(f"🔍 DEBUG: Found {len(actual_rows)} actual price rows for {timeframe_symbol}")
                     
                     if actual_rows:
                         actual_prices = [round(float(row['price']), 2) for row in reversed(actual_rows)]
-                        logging.info(f"✅ DEBUG: Successfully loaded {len(actual_prices)} actual prices for {timeframe_symbol}")
-                        logging.info(f"📊 DEBUG: Price range: {min(actual_prices):.2f} - {max(actual_prices):.2f}")
                     else:
-                        logging.error(f"❌ DEBUG: No actual price data found for {timeframe_symbol}")
                         raise Exception(f"No actual price data found for {timeframe_symbol}")
                         
             except Exception as e:
-                logging.error(f"❌ DEBUG: Database query failed for {timeframe_symbol}: {e}")
                 raise Exception(f"No database data available for {symbol} {timeframe}")
             
             timestamps = [(datetime.now() - timedelta(hours=len(actual_prices)-i)).isoformat() for i in range(len(actual_prices))]
@@ -395,24 +331,11 @@ def setup_routes(app: FastAPI, model, database=None):
             # Get historical predictions directly from database
             try:
                 if not db or not db.pool:
-                    logging.error(f"❌ DEBUG: Database not available for historical predictions {symbol} {timeframe}")
                     raise Exception(f"Database not available for {symbol}")
                 
                 # Direct database query for timeframe-specific predictions
                 async with db.pool.acquire() as conn:
-                    # Reduced prediction data points for all timeframes
                     limit = 50
-                    logging.info(f"🔍 DEBUG: Querying forecasts for {timeframe_symbol} with limit {limit}")
-                    
-                    # First check what forecast symbols exist in the database
-                    forecast_check = await conn.fetch("""
-                        SELECT DISTINCT symbol, COUNT(*) as count
-                        FROM forecasts
-                        WHERE symbol LIKE $1 AND predicted_price IS NOT NULL
-                        GROUP BY symbol
-                        ORDER BY count DESC
-                    """, f"{symbol}%")
-                    logging.info(f"🔍 DEBUG: Available forecast symbols for {symbol}: {[(row['symbol'], row['count']) for row in forecast_check]}")
                     
                     rows = await conn.fetch("""
                         SELECT predicted_price, created_at, confidence
@@ -421,17 +344,13 @@ def setup_routes(app: FastAPI, model, database=None):
                         ORDER BY created_at DESC
                         LIMIT $2
                     """, timeframe_symbol, limit)
-                    logging.info(f"🔍 DEBUG: Found {len(rows)} forecast rows for {timeframe_symbol}")
                     
                     if rows:
                         predicted_prices = [float(row['predicted_price']) for row in reversed(rows)]
-                        logging.info(f"✅ DEBUG: Successfully loaded {len(predicted_prices)} predictions for {timeframe_symbol}")
                     else:
-                        logging.error(f"❌ DEBUG: No predictions found for {timeframe_symbol}")
                         raise Exception(f"No historical predictions available for {timeframe_symbol}")
                     
             except Exception as e:
-                logging.error(f"❌ DEBUG: Failed to get historical predictions for {timeframe_symbol}: {e}")
                 raise Exception(f"No database predictions available for {timeframe_symbol}")
             
             # Ensure data lengths match
@@ -442,18 +361,11 @@ def setup_routes(app: FastAPI, model, database=None):
             predicted_prices = predicted_prices[:min_length]
             actual_prices = actual_prices[:min_length]
             
-
-            
             chart_data = {
                 'actual': actual_prices,
                 'predicted': predicted_prices[:len(actual_prices)] if predicted_prices else actual_prices,
                 'timestamps': timestamps
             }
-            logging.info(f"✅ DEBUG: Chart data created for {timeframe_symbol}: {len(chart_data['actual'])} actual, {len(chart_data['predicted'])} predicted points")
-            logging.info(f"📊 DEBUG: Final chart data - Actual: {actual_prices[:3]}..., Predicted: {chart_data['predicted'][:3]}...")
-            
-            forecast_time = (datetime.now() - forecast_start).total_seconds()
-
             
             return {
                 **prediction,
@@ -463,9 +375,6 @@ def setup_routes(app: FastAPI, model, database=None):
             }
             
         except Exception as e:
-            logging.error(f"❌ DEBUG: Complete forecast failure for {symbol} {timeframe}: {str(e)}")
-            import traceback
-            logging.error(f"🔍 DEBUG: Full traceback: {traceback.format_exc()}")
             raise Exception(f"Failed to generate forecast for {symbol} {timeframe}: {str(e)}")
 
 
@@ -622,12 +531,10 @@ def setup_routes(app: FastAPI, model, database=None):
         
         # Use connection manager for better connection handling
         connection_id = await manager.get_or_create_connection(websocket, symbol, timeframe)
-        logging.info(f"🔌 DEBUG: WebSocket connection established: {symbol} {timeframe} ({connection_id})")
         
         try:
             # Add to service with connection pooling
             await service.add_connection(websocket, symbol, connection_id, timeframe)
-            logging.info(f"✅ DEBUG: Added to service: {symbol} {timeframe}")
             
             # Listen for timeframe and asset changes
             async def handle_messages():
@@ -641,8 +548,6 @@ def setup_routes(app: FastAPI, model, database=None):
                             if data.get('type') == 'set_timeframe':
                                 new_timeframe = data.get('timeframe', timeframe)
                                 if new_timeframe != timeframe:
-                                    logging.info(f"🔄 DEBUG: Switching {symbol} timeframe: {timeframe} -> {new_timeframe}")
-                                    
                                     # Update timeframe in place
                                     if symbol in service.active_connections and connection_id in service.active_connections[symbol]:
                                         service.active_connections[symbol][connection_id]['timeframe'] = new_timeframe
@@ -660,15 +565,11 @@ def setup_routes(app: FastAPI, model, database=None):
                                             'timeframe': timeframe,
                                             'timestamp': datetime.now().isoformat()
                                         }))
-                                        
-                                        logging.info(f"✅ DEBUG: Timeframe updated to {timeframe}")
                             
                             # Handle asset switches
                             elif data.get('type') == 'set_symbol':
                                 new_symbol = data.get('symbol', symbol)
                                 if new_symbol != symbol:
-                                    logging.info(f"🔄 DEBUG: Switching asset: {symbol} -> {new_symbol}")
-                                    
                                     # Remove old connection
                                     service.remove_connection(symbol, connection_id)
                                     
@@ -695,15 +596,13 @@ def setup_routes(app: FastAPI, model, database=None):
                                             'timestamp': datetime.now().isoformat()
                                         }))
                                         
-                                        logging.info(f"✅ DEBUG: Asset switched to {symbol}")
-                                        
                         except json.JSONDecodeError:
                             pass
-                        except Exception as msg_error:
-                            logging.error(f"❌ DEBUG: Message processing error: {msg_error}")
+                        except Exception:
+                            pass
                             
-                except Exception as e:
-                    logging.error(f"❌ DEBUG: Message handling error: {e}")
+                except Exception:
+                    pass
             
             # Start message handler
             message_task = asyncio.create_task(handle_messages())
@@ -732,28 +631,22 @@ def setup_routes(app: FastAPI, model, database=None):
                             # Update connection state
                             await manager.update_connection_state(symbol, connection_id, last_ping=datetime.now())
                             
-                        except Exception as ping_error:
+                        except Exception:
                             ping_failures += 1
-                            logging.warning(f"⚠️ DEBUG: Ping failed for {symbol} (attempt {ping_failures}/{max_failures}): {ping_error}")
-                            
                             if ping_failures >= max_failures:
-                                logging.error(f"❌ DEBUG: Max ping failures reached for {symbol}, breaking")
                                 break
                     else:
-                        logging.info(f"🔌 DEBUG: WebSocket disconnected for {symbol}")
                         break
                         
                 except asyncio.CancelledError:
-                    logging.info(f"🔌 DEBUG: Keep-alive cancelled for {symbol}")
                     break
-                except Exception as e:
-                    logging.error(f"❌ DEBUG: Keep-alive error for {symbol}: {e}")
+                except Exception:
                     break
                 
         except WebSocketDisconnect:
-            logging.info(f"🔌 DEBUG: Client disconnected from real-time forecast: {symbol}")
-        except Exception as e:
-            logging.error(f"❌ DEBUG: Real-time WebSocket error for {symbol}: {e}")
+            pass
+        except Exception:
+            pass
         finally:
             # Graceful cleanup with connection manager
             try:
@@ -767,21 +660,17 @@ def setup_routes(app: FastAPI, model, database=None):
                 
                 # Safe disconnect through manager
                 await manager.safe_disconnect(websocket, symbol, connection_id)
-                logging.info(f"🔌 DEBUG: Gracefully cleaned up connection: {symbol}")
                 
-            except Exception as e:
-                logging.error(f"❌ DEBUG: Error in connection cleanup: {e}")
+            except Exception:
+                pass
     
     @app.websocket("/ws/asset/{symbol}/trends")
     async def asset_trends_websocket(websocket: WebSocket, symbol: str):
         """Real-time trends WebSocket with enhanced connection management"""
-        logging.info(f"🔌 TRENDS WS: Connection request for {symbol}")
         await websocket.accept()
-        logging.info(f"✅ TRENDS WS: Connection accepted for {symbol}")
         
         # Use connection manager
         connection_id = await manager.get_or_create_connection(websocket, symbol, "trends")
-        logging.info(f"🔌 TRENDS WS: Connection established for {symbol} ({connection_id})")
         
         try:
             # Handle messages
@@ -790,17 +679,15 @@ def setup_routes(app: FastAPI, model, database=None):
                 try:
                     async for message in websocket.iter_text():
                         try:
-                            logging.info(f"📥 TRENDS WS: Received message: {message}")
                             data = json.loads(message)
                             if data.get('type') == 'set_symbol':
                                 new_symbol = data.get('symbol', symbol)
                                 if new_symbol != symbol:
-                                    logging.info(f"🔄 TRENDS WS: Symbol changed from {symbol} to {new_symbol}")
                                     symbol = new_symbol
-                        except json.JSONDecodeError as e:
-                            logging.error(f"❌ TRENDS WS: JSON decode error: {e}")
-                except Exception as e:
-                    logging.error(f"❌ TRENDS WS: Message handling error: {e}")
+                        except json.JSONDecodeError:
+                            pass
+                except Exception:
+                    pass
             
             # Start message handler
             message_task = asyncio.create_task(handle_messages())
@@ -813,8 +700,6 @@ def setup_routes(app: FastAPI, model, database=None):
             while True:
                 try:
                     if hasattr(websocket, 'client_state') and websocket.client_state.name == 'CONNECTED':
-                        update_count += 1
-                        logging.info(f"📡 TRENDS WS: Sending update #{update_count} for {symbol}")
                         
                         # Use same accuracy calculation as API endpoint
                         try:
@@ -837,7 +722,6 @@ def setup_routes(app: FastAPI, model, database=None):
                                             break
                                 
                                 historical_data = await db.get_historical_forecasts(symbol, timeframe_days)
-                                logging.info(f"📋 TRENDS WS: Found {len(historical_data)} historical records for {symbol} ({timeframe_days} days)")
                                 historical_data = historical_data[:20]  # Limit to 20 latest records
                                 for record in historical_data:
                                     # Use sample data for missing values
@@ -851,13 +735,11 @@ def setup_routes(app: FastAPI, model, database=None):
                                         'actual': record.get('actual_direction') or sample_actual,
                                         'result': record.get('result') or sample_result
                                     })
-                                logging.info(f"📋 TRENDS WS: Processed {len(history)} history records for table")
-                        except Exception as e:
-                            logging.error(f"📋 TRENDS WS: History data error for {symbol}: {e}")
+                        except Exception:
+                            pass
                         
                         # Add fallback sample data if no history exists
                         if not history:
-                            logging.info(f"📋 TRENDS WS: No history data, adding sample data for {symbol}")
                             history = [
                                 {'date': '2024-01-15', 'forecast': 'UP', 'actual': 'UP', 'result': 'Hit'},
                                 {'date': '2024-01-14', 'forecast': 'DOWN', 'actual': 'UP', 'result': 'Miss'},
@@ -879,37 +761,33 @@ def setup_routes(app: FastAPI, model, database=None):
                             "last_updated": datetime.now().isoformat()
                         }
                         
-                        logging.info(f"📤 TRENDS WS: Sending data: accuracy={accuracy}%")
                         await websocket.send_text(json.dumps(trends_data))
                         
                         # Update connection state
                         await manager.update_connection_state(symbol, connection_id, last_ping=datetime.now())
                         ping_failures = 0
                     else:
-                        logging.info(f"🔌 TRENDS WS: Connection not active for {symbol}")
                         break
                         
-                except Exception as e:
+                except Exception:
                     ping_failures += 1
-                    logging.error(f"❌ TRENDS WS: Update error for {symbol} (attempt {ping_failures}/{max_failures}): {e}")
                     if ping_failures >= max_failures:
                         break
                 
                 await asyncio.sleep(1)  # Update every 1 second
                 
         except WebSocketDisconnect:
-            logging.info(f"🔌 TRENDS WS: Client disconnected for {symbol}")
-        except Exception as e:
-            logging.error(f"❌ TRENDS WS: Connection error for {symbol}: {e}")
+            pass
+        except Exception:
+            pass
         finally:
             # Graceful cleanup
             try:
                 if 'message_task' in locals():
                     message_task.cancel()
                 await manager.safe_disconnect(websocket, symbol, connection_id)
-                logging.info(f"🔌 TRENDS WS: Connection cleaned up for {symbol}")
-            except Exception as e:
-                logging.error(f"❌ TRENDS WS: Cleanup error: {e}")
+            except Exception:
+                pass
 
     @app.get("/api/asset/{symbol}/export")
     async def export_data(symbol: str, timeframe: str = "1M", request: Request = None):
@@ -1031,8 +909,6 @@ def setup_routes(app: FastAPI, model, database=None):
     @app.get("/api/health")
     async def health_check():
         """Comprehensive system health check"""
-        start_time = datetime.now()
-        logging.info("🏥 Health check started")
         
         health_status = {
             "status": "healthy",
@@ -1040,37 +916,16 @@ def setup_routes(app: FastAPI, model, database=None):
             "services": {}
         }
         
-        # Check database with detailed timing
-        db_start = datetime.now()
+        # Check database
         try:
-            logging.info("💾 Testing database connection...")
             if db and db.pool:
-                pool_stats = db.get_pool_stats()
-                logging.info(f"📊 Pool stats: {pool_stats}")
-                
-                acquire_start = datetime.now()
                 async with db.pool.acquire() as conn:
-                    acquire_time = (datetime.now() - acquire_start).total_seconds()
-                    logging.info(f"⏱️ Pool acquire took {acquire_time:.2f}s")
-                    
-                    query_start = datetime.now()
                     result = await conn.fetchval("SELECT 1")
-                    query_time = (datetime.now() - query_start).total_seconds()
-                    logging.info(f"⏱️ Query execution took {query_time:.2f}s")
-                    
-                db_time = (datetime.now() - db_start).total_seconds()
-                logging.info(f"✅ Database test completed in {db_time:.2f}s")
                 health_status["services"]["database"] = "connected"
-                health_status["db_test_time"] = f"{db_time:.2f}s"
-                health_status["db_acquire_time"] = f"{acquire_time:.2f}s"
-                health_status["db_query_time"] = f"{query_time:.2f}s"
                 health_status["db_pool_stats"] = db.get_pool_stats()
             else:
                 health_status["services"]["database"] = "disconnected"
-                logging.warning("⚠️ No database pool available")
         except Exception as e:
-            db_time = (datetime.now() - db_start).total_seconds()
-            logging.error(f"❌ Database test failed in {db_time:.2f}s: {e}")
             health_status["services"]["database"] = f"error: {str(e)}"
             health_status["status"] = "degraded"
         
@@ -1097,41 +952,22 @@ def setup_routes(app: FastAPI, model, database=None):
             health_status["services"]["redis"] = f"error: {str(e)}"
         
         # Check ML model and caching
-        ml_start = datetime.now()
         try:
-            logging.info("🤖 Testing ML model prediction...")
             test_prediction = model.predict('BTC')
-            ml_time = (datetime.now() - ml_start).total_seconds()
-            logging.info(f"✅ ML model test completed in {ml_time:.2f}s")
-            
             health_status["services"]["ml_model"] = "operational"
             health_status["model_type"] = "XGBoost" if hasattr(model, 'xgb_model') and model.xgb_model else "Enhanced Technical"
             health_status["cache_type"] = "Redis" if hasattr(model, 'redis_client') and model.redis_client else "Memory"
-            health_status["ml_test_time"] = f"{ml_time:.2f}s"
         except Exception as e:
-            ml_time = (datetime.now() - ml_start).total_seconds()
-            logging.error(f"❌ ML model test failed in {ml_time:.2f}s: {e}")
             health_status["services"]["ml_model"] = f"error: {str(e)}"
             health_status["status"] = "degraded"
         
         # Check external APIs
-        api_start = datetime.now()
         try:
-            logging.info("🌍 Testing external APIs...")
             multi_asset.get_asset_data('BTC')
-            api_time = (datetime.now() - api_start).total_seconds()
-            logging.info(f"✅ External API test completed in {api_time:.2f}s")
             health_status["services"]["external_apis"] = "operational"
-            health_status["api_test_time"] = f"{api_time:.2f}s"
         except Exception as e:
-            api_time = (datetime.now() - api_start).total_seconds()
-            logging.error(f"❌ External API test failed in {api_time:.2f}s: {e}")
             health_status["services"]["external_apis"] = f"error: {str(e)}"
             health_status["status"] = "degraded"
-        
-        total_time = (datetime.now() - start_time).total_seconds()
-        logging.info(f"🏁 Health check completed in {total_time:.2f}s")
-        health_status["total_check_time"] = f"{total_time:.2f}s"
         
         return health_status
     
@@ -1193,7 +1029,6 @@ def setup_routes(app: FastAPI, model, database=None):
         
         connection_id = await manager.get_or_create_connection(websocket, "market_summary", "live")
         current_filter = 'all'
-        logging.info(f"🔌 DEBUG: Market summary WebSocket established ({connection_id})")
         
         async def get_cached_market_data():
             """Get market data from Redis cache or generate if not cached"""
@@ -1302,11 +1137,10 @@ def setup_routes(app: FastAPI, model, database=None):
                             if data.get('type') == 'set_filter':
                                 # Handle filter changes for future enhancement
                                 class_filter = data.get('class_filter', 'all')
-                                logging.info(f"🔄 DEBUG: Market summary filter changed to {class_filter}")
                         except json.JSONDecodeError:
                             pass
-                except Exception as e:
-                    logging.error(f"❌ DEBUG: Market summary message handling error: {e}")
+                except Exception:
+                    pass
             
             # Start message handler
             message_task = asyncio.create_task(handle_messages())
@@ -1340,30 +1174,27 @@ def setup_routes(app: FastAPI, model, database=None):
                         await manager.update_connection_state("market_summary", connection_id, last_ping=datetime.now())
                         ping_failures = 0
                     else:
-                        logging.info(f"🔌 DEBUG: Market summary WebSocket disconnected")
                         break
                         
-                except Exception as e:
+                except Exception:
                     ping_failures += 1
-                    logging.error(f"❌ DEBUG: Market summary update error (attempt {ping_failures}/{max_failures}): {e}")
                     if ping_failures >= max_failures:
                         break
                 
                 await asyncio.sleep(0.5)  # Update every 0.5 seconds
                 
         except WebSocketDisconnect:
-            logging.info(f"🔌 DEBUG: Market summary WebSocket disconnected")
-        except Exception as e:
-            logging.error(f"❌ DEBUG: Market summary WebSocket error: {e}")
+            pass
+        except Exception:
+            pass
         finally:
             # Graceful cleanup
             try:
                 if 'message_task' in locals():
                     message_task.cancel()
                 await manager.safe_disconnect(websocket, "market_summary", connection_id)
-                logging.info(f"🔌 DEBUG: Market summary connection cleaned up")
-            except Exception as e:
-                logging.error(f"❌ DEBUG: Market summary cleanup error: {e}")
+            except Exception:
+                pass
     
     @app.websocket("/ws/mobile")
     async def deprecated_mobile_websocket(websocket: WebSocket):

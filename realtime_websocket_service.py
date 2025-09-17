@@ -435,8 +435,8 @@ class RealTimeWebSocketService:
                     }
                     await websocket.send_text(cached_message)
                     return
-            except Exception as e:
-                logging.warning(f"⚠️ Redis cache failed: {e}")
+            except Exception:
+                pass
             
             # Use database from constructor or fallback to global
             db = self.database
@@ -445,22 +445,15 @@ class RealTimeWebSocketService:
                     from database import db as global_db
                     if global_db and global_db.pool:
                         db = global_db
-                        logging.info(f"✅ DEBUG: Using global database for {symbol} {timeframe}")
                     else:
-                        logging.error(f"❌ DEBUG: No database available for {symbol} {timeframe}")
                         return
-                except Exception as e:
-                    logging.error(f"❌ DEBUG: Database import failed for {symbol} {timeframe}: {e}")
+                except Exception:
                     return
-            
-            logging.info(f"✅ DEBUG: Using database for {symbol} {timeframe}")
             
             # Get historical chart data from database with normalized timeframe
             normalized_tf = '4H' if timeframe.lower() == '4h' else timeframe
             query_symbol = f"{symbol}_{normalized_tf}"
-            logging.info(f"🔍 DEBUG: Querying database for {query_symbol} (original: {symbol} {timeframe})")
             chart_data = await db.get_chart_data(query_symbol, normalized_tf)
-            logging.info(f"🔍 DEBUG: Database returned: actual={len(chart_data.get('actual', []))}, forecast={len(chart_data.get('forecast', []))}, timestamps={len(chart_data.get('timestamps', []))}")
             
             if chart_data['actual'] and chart_data['forecast']:
                 # Use database data
@@ -468,10 +461,8 @@ class RealTimeWebSocketService:
                 actual_data = [float(x) for x in chart_data['actual'][-points:]]
                 forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
                 timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
-                logging.info(f"✅ DEBUG: Using database data for {symbol} {timeframe}: {len(actual_data)} points")
             else:
                 # Force database query with timeframe-specific symbol
-                logging.warning(f"⚠️ DEBUG: No data for {symbol} {timeframe}, trying timeframe-specific query")
                 timeframe_symbol = f"{symbol}_{timeframe}" if timeframe in ['1m', '5m', '15m', '1h', '4h', '1D', '1W'] else symbol
                 chart_data = await db.get_chart_data(timeframe_symbol, timeframe)
                 
@@ -480,9 +471,7 @@ class RealTimeWebSocketService:
                     actual_data = [float(x) for x in chart_data['actual'][-points:]]
                     forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
                     timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
-                    logging.info(f"✅ DEBUG: Using timeframe-specific database data for {timeframe_symbol}: {len(actual_data)} points")
                 else:
-                    logging.error(f"❌ DEBUG: No database data available for {symbol}/{timeframe_symbol}")
                     return  # Don't send synthetic data
             
             historical_message = {
@@ -515,10 +504,8 @@ class RealTimeWebSocketService:
                 pass
             
             await websocket.send_text(message_json)
-            logging.info(f"✅ DEBUG: Sent historical data for {symbol} {timeframe} with {len(actual_data)} points")
             
-        except Exception as e:
-            logging.error(f"❌ DEBUG: Failed to send historical data for {symbol} {timeframe}: {e}")
+        except Exception:
             # Don't send anything if database fails
             return
     

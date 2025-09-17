@@ -27,12 +27,20 @@ class GapFillingService:
         logging.info("🔄 Starting gap filling process...")
         
         for symbol in self.binance_symbols.keys():
-            try:
-                await self._fill_symbol_gaps(symbol)
-                # Add delay to prevent API rate limiting
-                await asyncio.sleep(0.5)
-            except Exception as e:
-                ErrorHandler.log_database_error('gap_filling', symbol, str(e))
+            success = False
+            for attempt in range(3):  # 3 retry attempts
+                try:
+                    await self._fill_symbol_gaps(symbol)
+                    success = True
+                    break
+                except Exception as e:
+                    if attempt < 2:  # Not the last attempt
+                        await asyncio.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s
+                    else:
+                        ErrorHandler.log_database_error('gap_filling', symbol, str(e))
+            
+            if success:
+                await asyncio.sleep(0.5)  # Rate limiting delay
         
         logging.info("✅ Gap filling completed")
     
@@ -68,7 +76,7 @@ class GapFillingService:
             logging.info(f"✅ Filled {len(historical_data)} data points for {symbol}")
     
     async def _fetch_binance_klines(self, symbol, start_time, end_time):
-        """Fetch historical klines from Binance API"""
+        """Fetch historical klines from Binance API with retry logic"""
         binance_symbol = self.binance_symbols.get(symbol)
         if not binance_symbol:
             return []
@@ -86,18 +94,30 @@ class GapFillingService:
             'limit': 1000
         }
         
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return self._process_klines(data)
-                    else:
-                        ErrorHandler.log_api_error('binance', symbol, str(response.status))
+        for attempt in range(3):  # 3 retry attempts
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            return self._process_klines(data)
+                        elif response.status == 429:  # Rate limited
+                            if attempt < 2:
+                                await asyncio.sleep(5 * (attempt + 1))  # 5s, 10s
+                                continue
+                        else:
+                            ErrorHandler.log_api_error('binance', symbol, str(response.status))
+                            if attempt < 2:
+                                await asyncio.sleep(2 ** attempt)
+                                continue
                         return []
-        except Exception as e:
-            ErrorHandler.log_api_error('binance_klines', symbol, str(e))
-            return []
+            except Exception as e:
+                if attempt < 2:
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                else:
+                    ErrorHandler.log_api_error('binance_klines', symbol, str(e))
+        
+        return []
     
     def _process_klines(self, klines_data):
         """Process Binance klines data into our format"""

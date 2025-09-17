@@ -528,35 +528,24 @@ class StockRealtimeService:
                     from database import db as global_db
                     if global_db and global_db.pool:
                         db = global_db
-                        logging.info(f"✅ DEBUG: Using global database for stock {symbol} {timeframe}")
                     else:
-                        logging.error(f"❌ DEBUG: No database available for stock {symbol} {timeframe}")
                         return
-                except Exception as e:
-                    logging.error(f"❌ DEBUG: Database import failed for stock {symbol} {timeframe}: {e}")
+                except Exception:
                     return
-            else:
-                logging.info(f"✅ DEBUG: Using constructor database for stock {symbol} {timeframe}")
                 
-            logging.info(f"🔍 DEBUG: Getting stock chart data for {symbol} {timeframe}")
             chart_data = await db.get_chart_data(symbol, timeframe)
-            logging.info(f"🔍 DEBUG: Stock chart data result: actual={len(chart_data.get('actual', []))}, forecast={len(chart_data.get('forecast', []))}, timestamps={len(chart_data.get('timestamps', []))}")
             
             if chart_data['actual'] and chart_data['forecast']:
                 points = 50
                 actual_data = [float(x) for x in chart_data['actual'][-points:]]
                 forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
                 timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
-                logging.info(f"✅ DEBUG: Using database data for stock {symbol} {timeframe}: {len(actual_data)} points")
-                logging.info(f"📊 DEBUG: Sample stock actual data: {actual_data[:3]}...")
             else:
                 # Generate synthetic data
-                logging.warning(f"⚠️ DEBUG: No database data for stock {symbol} {timeframe}, generating synthetic")
                 current_price = self.price_cache.get(symbol, {}).get('current_price', 150)
                 actual_data = [current_price + (i * 2) for i in range(-25, 25)]
                 forecast_data = [price * 1.005 for price in actual_data]
                 timestamps = [(datetime.now() - timedelta(hours=25-i)).isoformat() for i in range(50)]
-                logging.info(f"📊 DEBUG: Generated synthetic stock data with {len(actual_data)} points")
             
             historical_message = {
                 "type": "historical_data",  # Standardize message type
@@ -583,10 +572,8 @@ class StockRealtimeService:
             
             await websocket.send_text(message_json)
             
-        except Exception as e:
-            logging.error(f"❌ DEBUG: Failed to send stock historical data for {symbol} {timeframe}: {e}")
-            import traceback
-            logging.error(f"🔍 DEBUG: Full traceback: {traceback.format_exc()}")
+        except Exception:
+            pass
     
     async def _generate_fresh_stock_prediction(self, symbol):
         """Generate fresh stock prediction in background"""
@@ -598,13 +585,8 @@ class StockRealtimeService:
     
     def remove_connection(self, symbol, connection_id):
         """Remove WebSocket connection"""
-        logging.info(f"🔌 DEBUG: remove_connection called for stock {symbol} connection_id {connection_id}")
         if symbol in self.active_connections and connection_id in self.active_connections[symbol]:
             del self.active_connections[symbol][connection_id]
-            remaining = len(self.active_connections[symbol])
-            logging.info(f"🔌 DEBUG: Stock WebSocket disconnected: {symbol} (Remaining: {remaining})")
-        else:
-            logging.warning(f"⚠️ DEBUG: Connection {connection_id} not found for stock {symbol}")
     
     async def close(self):
         """Close the service and cleanup"""

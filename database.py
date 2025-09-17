@@ -297,35 +297,29 @@ class TradingDatabase:
             redis_client = None
             
         days = {'1D': 7, '7D': 7, '1M': 30, '1Y': 365, '4H': 7, '4h': 7, '5m': 7, '15m': 7, '30m': 7, '1h': 7, '1W': 30}.get(timeframe, 7)
-        logging.info(f"🔍 DEBUG: get_chart_data for {symbol} {timeframe} using {days} days, db_symbol={db_symbol}")
         
         async with self.pool.acquire() as conn:
             # Get forecasts for timeframe-specific symbol
-            logging.info(f"🔍 DEBUG: Querying forecasts table for {db_symbol} with {days} days interval")
             forecast_rows = await conn.fetch("""
                 SELECT predicted_price, created_at
                 FROM forecasts
                 WHERE symbol = $1 AND created_at >= NOW() - INTERVAL '%s days'
                 ORDER BY created_at
             """ % days, db_symbol)
-            logging.info(f"🔍 DEBUG: Found {len(forecast_rows)} forecast rows for {db_symbol}")
             
             # Get actual prices for timeframe-specific symbol
-            logging.info(f"🔍 DEBUG: Querying actual_prices table for {db_symbol} with {days} days interval")
             actual_rows = await conn.fetch("""
                 SELECT price, timestamp
                 FROM actual_prices
                 WHERE symbol = $1 AND timestamp >= NOW() - INTERVAL '%s days'
                 ORDER BY timestamp
             """ % days, db_symbol)
-            logging.info(f"🔍 DEBUG: Found {len(actual_rows)} actual price rows for {db_symbol}")
             
             chart_data = {
                 'forecast': [float(row['predicted_price']) for row in forecast_rows if row['predicted_price']],
                 'actual': [float(row['price']) for row in actual_rows],
                 'timestamps': [row['timestamp'].isoformat() for row in actual_rows]
             }
-            logging.info(f"✅ DEBUG: Chart data created for {db_symbol}: forecast={len(chart_data['forecast'])}, actual={len(chart_data['actual'])}, timestamps={len(chart_data['timestamps'])}")
             
             # Enhanced caching with dynamic TTL
             if redis_client:
@@ -337,11 +331,9 @@ class TradingDatabase:
                     ttl = base_ttl // 2 if symbol in hot_symbols else base_ttl
                     
                     redis_client.setex(cache_key, ttl, json.dumps(chart_data))
-                    logging.info(f"✅ Cached chart data for {cache_key} (TTL: {ttl}s)")
                 except Exception as e:
                     logging.warning(f"⚠️ Failed to cache chart data: {e}")
             
-            logging.info(f"✅ Returning chart data for {symbol} {timeframe} (db_symbol={db_symbol})")
             return chart_data
     
     async def export_csv_data(self, symbol, timeframe='1M'):
