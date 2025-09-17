@@ -90,7 +90,7 @@ class StockRealtimeService:
             # Get real-time price data
             price_data = await self._get_realtime_stock_data(symbol)
             if price_data:
-                print(f"💹 Stock data: {symbol} = ${price_data['current_price']:.2f}")
+
                 # Update cache
                 cache_data = {
                     **price_data,
@@ -101,7 +101,7 @@ class StockRealtimeService:
                 # Cache using centralized manager
                 cache_key = self.cache_keys.price(symbol, 'stock')
                 self.cache_manager.set_cache(cache_key, cache_data, ttl=30)
-                print(f"📊 Stock cached {symbol}: ${price_data['current_price']:.2f} ({price_data['change_24h']:+.2f}%)")
+
                 
 
                 
@@ -524,7 +524,9 @@ class StockRealtimeService:
                 except Exception:
                     return
                 
+            print(f"📊 Stock DB Query: {symbol} for timeframe {timeframe}")
             chart_data = await db.get_chart_data(symbol, timeframe)
+            print(f"📊 Stock DB Result: {len(chart_data.get('actual', []))} actual, {len(chart_data.get('forecast', []))} forecast")
             
             if chart_data['actual'] and chart_data['forecast']:
                 # Ensure proper data alignment
@@ -537,8 +539,8 @@ class StockRealtimeService:
                 
                 print(f"📊 Stock historical data for {symbol}: {len(actual_data)} actual, {len(forecast_data)} forecast")
             else:
-                print(f"❌ No stock database data for {symbol}")
-                return  # Don't send data if no database data available
+                print(f"❌ No stock database data for {symbol} - not sending fake data")
+                return
             
             historical_message = {
                 "type": "historical_data",  # Standardize message type

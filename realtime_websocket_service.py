@@ -71,7 +71,7 @@ class RealTimeWebSocketService:
                     'volume': 1000000000 if symbol in ['USDT', 'USDC'] else 500000000,
                     'timestamp': datetime.now()
                 }
-                print(f"🔄 Pre-cached {symbol}: ${price}")
+
                 
                 # Cache using centralized manager
                 cache_key = self.cache_keys.price(symbol, 'crypto')
@@ -96,7 +96,7 @@ class RealTimeWebSocketService:
                         'volume': 1000000000,  # High volume for stablecoins
                         'timestamp': datetime.now()
                     }
-                    print(f"💰 Stablecoin {symbol} cached: $1.00")
+    
                 
                 await asyncio.sleep(5)  # Update every 5 seconds
                 
@@ -141,7 +141,7 @@ class RealTimeWebSocketService:
                             # Cache using centralized manager
                             cache_key = self.cache_keys.price(symbol, 'crypto')
                             self.cache_manager.set_cache(cache_key, price_data, ttl=30)
-                            print(f"📊 Cached {symbol}: ${current_price:.2f} ({change_24h:+.2f}%)")
+            
 
                             
                             # Always store data for all timeframes (regardless of connections)
@@ -525,7 +525,9 @@ class RealTimeWebSocketService:
             # Get historical chart data from database with normalized timeframe
             normalized_tf = '4H' if timeframe.lower() == '4h' else timeframe
             query_symbol = f"{symbol}_{normalized_tf}"
+            print(f"📊 DB Query: {query_symbol} for timeframe {normalized_tf}")
             chart_data = await db.get_chart_data(query_symbol, normalized_tf)
+            print(f"📊 DB Result: {len(chart_data.get('actual', []))} actual, {len(chart_data.get('forecast', []))} forecast")
             
             if chart_data['actual'] and chart_data['forecast']:
                 # Use database data with proper alignment
@@ -544,7 +546,9 @@ class RealTimeWebSocketService:
             else:
                 # Force database query with timeframe-specific symbol
                 timeframe_symbol = f"{symbol}_{timeframe}" if timeframe in ['1m', '5m', '15m', '1h', '4h', '1D', '1W'] else symbol
+                print(f"📊 DB Fallback Query: {timeframe_symbol} for timeframe {timeframe}")
                 chart_data = await db.get_chart_data(timeframe_symbol, timeframe)
+                print(f"📊 DB Fallback Result: {len(chart_data.get('actual', []))} actual, {len(chart_data.get('forecast', []))} forecast")
                 
                 if chart_data['actual'] and chart_data['forecast']:
                     # Ensure proper data alignment
@@ -557,8 +561,8 @@ class RealTimeWebSocketService:
                     
                     print(f"📊 Fallback data for {symbol}: {len(actual_data)} actual, {len(forecast_data)} forecast")
                 else:
-                    print(f"❌ No database data for {symbol}_{timeframe}")
-                    return  # Don't send synthetic data
+                    print(f"❌ No database data for {symbol}_{timeframe} - not sending fake data")
+                    return
             
             historical_message = {
                 "type": "historical_data",
@@ -675,7 +679,7 @@ class RealTimeWebSocketService:
                                                     'timestamp': datetime.now()
                                                 }
                                                 self.price_cache[symbol] = price_data
-                                                print(f"🔄 Fallback cached {symbol}: ${price_data['current_price']:.2f}")
+                                
                                                 
                                                 # Cache using centralized manager
                                                 cache_key = self.cache_keys.price(symbol, 'crypto')

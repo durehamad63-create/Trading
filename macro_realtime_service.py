@@ -77,7 +77,7 @@ class MacroRealtimeService:
                     # Cache using centralized manager
                     cache_key = self.cache_keys.price(symbol, 'macro')
                     self.cache_manager.set_cache(cache_key, cache_data, ttl=60)
-                    print(f"📊 Macro cached {symbol}: {new_value:.2f} ({change_pct:+.3f}%)")
+    
                     
                     # Macro updates (logging removed)
                     
@@ -260,7 +260,9 @@ class MacroRealtimeService:
                     print(f"❌ Macro database fallback failed: {e}")
                     return
             
+            print(f"📊 Macro DB Query: {symbol} for timeframe {timeframe}")
             chart_data = await db.get_chart_data(symbol, timeframe)
+            print(f"📊 Macro DB Result: {len(chart_data.get('actual', []))} actual, {len(chart_data.get('forecast', []))} forecast")
             
             if chart_data['actual'] and chart_data['forecast']:
                 # Ensure proper data alignment
@@ -273,8 +275,8 @@ class MacroRealtimeService:
                 
                 print(f"📊 Macro historical data for {symbol}: {len(actual_data)} actual, {len(forecast_data)} forecast")
             else:
-                print(f"❌ No macro database data for {symbol}")
-                return  # Don't send data if no database data available
+                print(f"❌ No macro database data for {symbol} - not sending fake data")
+                return
             
             # Get indicator name
             indicator_names = {
