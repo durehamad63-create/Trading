@@ -85,25 +85,31 @@ async def lifespan(app: FastAPI):
     # Initialize services INSTANTLY without waiting
     from realtime_websocket_service import RealTimeWebSocketService
     from stock_realtime_service import StockRealtimeService
+    from macro_realtime_service import MacroRealtimeService
     import realtime_websocket_service as rws_module
     import stock_realtime_service as stock_module
+    import macro_realtime_service as macro_module
     import modules.api_routes as api_module
     
     # Setup services with database connection
     realtime_service = RealTimeWebSocketService(model, db)
     stock_service = StockRealtimeService(model, db)
+    macro_service = MacroRealtimeService(model, db)
     
     # Make services available IMMEDIATELY
     rws_module.realtime_service = realtime_service
     stock_module.stock_realtime_service = stock_service
+    macro_module.macro_realtime_service = macro_service
     api_module.realtime_service = realtime_service
     api_module.stock_service = stock_service
     api_module.stock_realtime_service = stock_service
+    api_module.macro_realtime_service = macro_service
     
     # START STREAMS INSTANTLY - no await, pure background
     background_tasks = [
         asyncio.create_task(realtime_service.start_binance_streams()),
-        asyncio.create_task(stock_service.start_stock_streams())
+        asyncio.create_task(stock_service.start_stock_streams()),
+        asyncio.create_task(macro_service.start_macro_streams())
     ]
     
     # Database connection in background (non-blocking)

@@ -17,6 +17,7 @@ from utils.cache_manager import CacheKeys
 
 # Global variables for services (set by main.py)
 stock_realtime_service = None
+macro_realtime_service = None
 
 # Task manager removed - using direct async for simplicity
 class SimpleTaskManager:
@@ -158,15 +159,11 @@ def setup_routes(app: FastAPI, model, database=None):
                 if cache_age < cache_timeout:
                     return prediction_cache[symbol]['data']
             
+            # Only return data if model is available and working
+            if not model:
+                return None
+                
             try:
-                if not model:
-                    # Fallback prediction when model not ready
-                    return {
-                        'symbol': symbol, 'current_price': 100, 'predicted_price': 101,
-                        'forecast_direction': 'HOLD', 'confidence': 50, 'change_24h': 0,
-                        'name': multi_asset.get_asset_name(symbol)
-                    }
-                    
                 prediction = await model.predict(symbol)
                 prediction['name'] = multi_asset.get_asset_name(symbol)
                 
@@ -176,7 +173,6 @@ def setup_routes(app: FastAPI, model, database=None):
                         import json
                         cache_key = CacheKeys.prediction(symbol)
                         redis_client.setex(cache_key, cache_timeout, json.dumps(prediction))
-                        pass
                     except Exception as e:
                         pass
                 
@@ -188,21 +184,70 @@ def setup_routes(app: FastAPI, model, database=None):
                 
                 return prediction
             except Exception as e:
-                pass
-                return {
-                    'symbol': symbol, 'current_price': 100, 'predicted_price': 101,
-                    'forecast_direction': 'HOLD', 'confidence': 50, 'change_24h': 0,
-                    'name': multi_asset.get_asset_name(symbol)
-                }
+                return None
         
-        # Run predictions concurrently
-        tasks = [get_prediction_fast(symbol) for symbol in symbols]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+        # Get data directly from stream caches instead of predictions
         assets = []
-        for i, result in enumerate(results):
-            if isinstance(result, dict) and result and 'symbol' in result:
-                assets.append(result)
+        
+        # Get data from stream services only
+        if class_filter in ["crypto", "all"]:
+            if realtime_service and hasattr(realtime_service, 'price_cache'):
+                for symbol in symbols:
+                    if symbol in realtime_service.price_cache:
+                        price_data = realtime_service.price_cache[symbol]
+                        assets.append({
+                            'symbol': symbol,
+                            'name': multi_asset.get_asset_name(symbol),
+                            'current_price': price_data['current_price'],
+                            'change_24h': price_data['change_24h'],
+                            'volume': price_data['volume'],
+                            'forecast_direction': 'UP' if price_data['change_24h'] > 1 else 'DOWN' if price_data['change_24h'] < -1 else 'HOLD',
+                            'confidence': min(80, max(60, 70 + abs(price_data['change_24h']))),
+                            'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
+                            'data_source': 'Binance Stream'
+                        })
+        
+        if class_filter in ["stocks", "all"]:
+            if stock_realtime_service and hasattr(stock_realtime_service, 'price_cache'):
+                for symbol in symbols:
+                    if symbol in stock_realtime_service.price_cache:
+                        price_data = stock_realtime_service.price_cache[symbol]
+                        assets.append({
+                            'symbol': symbol,
+                            'name': stock_realtime_service.stock_symbols.get(symbol, symbol),
+                            'current_price': price_data['current_price'],
+                            'change_24h': price_data['change_24h'],
+                            'volume': price_data['volume'],
+                            'forecast_direction': 'UP' if price_data['change_24h'] > 0.5 else 'DOWN' if price_data['change_24h'] < -0.5 else 'HOLD',
+                            'confidence': min(85, max(65, 75 + abs(price_data['change_24h']))),
+                            'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
+                            'data_source': price_data.get('data_source', 'Stock API')
+                        })
+        
+        if class_filter in ["macro", "all"]:
+            if macro_realtime_service and hasattr(macro_realtime_service, 'price_cache'):
+                for symbol in symbols:
+                    if symbol in macro_realtime_service.price_cache:
+                        price_data = macro_realtime_service.price_cache[symbol]
+                        unit = price_data.get('unit', '')
+                        if unit == 'B':
+                            formatted_price = f"${price_data['current_price']:.0f}B"
+                        elif unit == '%':
+                            formatted_price = f"{price_data['current_price']:.2f}%"
+                        else:
+                            formatted_price = f"{price_data['current_price']:.1f}"
+                        
+                        assets.append({
+                            'symbol': symbol,
+                            'name': multi_asset.get_asset_name(symbol),
+                            'current_price': price_data['current_price'],
+                            'formatted_price': formatted_price,
+                            'change_24h': price_data['change_24h'],
+                            'volume': price_data['volume'],
+                            'forecast_direction': 'UP' if price_data['change_24h'] > 0.01 else 'DOWN' if price_data['change_24h'] < -0.01 else 'HOLD',
+                            'confidence': min(90, max(70, 80 + abs(price_data['change_24h']) * 10)),
+                            'data_source': 'Economic Simulation'
+                        })
         
         return {"assets": assets}
 
@@ -567,19 +612,29 @@ def setup_routes(app: FastAPI, model, database=None):
         """Real-time forecast WebSocket with improved connection management"""
         await websocket.accept()
         
-        # Determine if symbol is crypto or stock
+        # Determine if symbol is crypto, stock, or macro
         crypto_symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX']
         stock_symbols = ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM']
+        macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
         
         is_crypto = symbol in crypto_symbols
         is_stock = symbol in stock_symbols
+        is_macro = symbol in macro_symbols
         
-        if not (is_crypto or is_stock):
+        if not (is_crypto or is_stock or is_macro):
             await websocket.close(code=1000, reason=f"Unsupported symbol: {symbol}")
             return
         
-        timeframe = "4h" if is_crypto else "1D"  # Default timeframes
-        service = realtime_service if is_crypto else stock_realtime_service
+        # Default timeframes
+        if is_crypto:
+            timeframe = "4h"
+            service = realtime_service
+        elif is_stock:
+            timeframe = "1D"
+            service = stock_realtime_service
+        else:  # is_macro
+            timeframe = "1D"
+            service = macro_realtime_service
         
         if not service:
             await websocket.close(code=1000, reason="Service unavailable")
@@ -612,8 +667,10 @@ def setup_routes(app: FastAPI, model, database=None):
                                         # Send fresh historical data immediately
                                         if is_crypto:
                                             await realtime_service._send_historical_data(websocket, symbol, new_timeframe)
-                                        else:
+                                        elif is_stock:
                                             await stock_realtime_service._send_stock_historical_data(websocket, symbol, new_timeframe)
+                                        else:  # is_macro
+                                            await macro_realtime_service._send_macro_historical_data(websocket, symbol, new_timeframe)
                                         
                                         await websocket.send_text(json.dumps({
                                             'type': 'timeframe_changed',
@@ -632,7 +689,15 @@ def setup_routes(app: FastAPI, model, database=None):
                                     # Update symbol and determine new service
                                     symbol = new_symbol
                                     is_crypto = symbol in crypto_symbols
-                                    service = realtime_service if is_crypto else stock_realtime_service
+                                    is_stock = symbol in stock_symbols
+                                    is_macro = symbol in macro_symbols
+                                    
+                                    if is_crypto:
+                                        service = realtime_service
+                                    elif is_stock:
+                                        service = stock_realtime_service
+                                    else:  # is_macro
+                                        service = macro_realtime_service
                                     
                                     if service:
                                         # Create new connection for new symbol
@@ -642,8 +707,10 @@ def setup_routes(app: FastAPI, model, database=None):
                                         # Send historical data for new symbol
                                         if is_crypto:
                                             await realtime_service._send_historical_data(websocket, symbol, timeframe)
-                                        else:
+                                        elif is_stock:
                                             await stock_realtime_service._send_stock_historical_data(websocket, symbol, timeframe)
+                                        else:  # is_macro
+                                            await macro_realtime_service._send_macro_historical_data(websocket, symbol, timeframe)
                                         
                                         await websocket.send_text(json.dumps({
                                             'type': 'symbol_changed',
@@ -678,7 +745,7 @@ def setup_routes(app: FastAPI, model, database=None):
                                 "type": "ping", 
                                 "symbol": symbol,
                                 "timeframe": timeframe,
-                                "asset_type": "crypto" if is_crypto else "stock",
+                                "asset_type": "crypto" if is_crypto else "stock" if is_stock else "macro",
                                 "timestamp": datetime.now().isoformat()
                             }
                             await websocket.send_text(json.dumps(ping_data))
@@ -1153,28 +1220,44 @@ def setup_routes(app: FastAPI, model, database=None):
                             'data_source': price_data.get('data_source', 'Stock API'),
                             'asset_class': 'stocks'
                         })
-
             
-            # Fallback: If no real-time data, use ML predictions
-            if not assets:
-                fallback_symbols = crypto_symbols[:5] + stock_symbols[:5]  # Top 5 of each
-                for symbol in fallback_symbols:
-                    try:
-                        prediction = model.predict(symbol)
+            # Get macro data - only from macro symbols
+            if macro_realtime_service and hasattr(macro_realtime_service, 'price_cache'):
+                macro_count = 0
+                for symbol in macro_realtime_service.price_cache.keys():
+                    if symbol in macro_symbols:  # Only include if in macro list
+                        price_data = macro_realtime_service.price_cache[symbol]
+                        change = price_data['change_24h']
+                        macro_count += 1
+                        
+                        # Format value based on indicator type
+                        unit = price_data.get('unit', '')
+                        if unit == 'B':
+                            formatted_price = f"${price_data['current_price']:.0f}B"
+                            predicted_range = f"${price_data['current_price']*0.99:.0f}B–${price_data['current_price']*1.01:.0f}B"
+                        elif unit == '%':
+                            formatted_price = f"{price_data['current_price']:.2f}%"
+                            predicted_range = f"{price_data['current_price']*0.99:.2f}%–{price_data['current_price']*1.01:.2f}%"
+                        else:
+                            formatted_price = f"{price_data['current_price']:.1f}"
+                            predicted_range = f"{price_data['current_price']*0.99:.1f}–{price_data['current_price']*1.01:.1f}"
+                        
                         assets.append({
                             'symbol': symbol,
                             'name': multi_asset.get_asset_name(symbol),
-                            'current_price': prediction['current_price'],
-                            'change_24h': prediction['change_24h'],
-                            'volume': 1000000,  # Default volume
-                            'forecast_direction': prediction['forecast_direction'],
-                            'confidence': prediction['confidence'],
-                            'predicted_range': prediction['predicted_range'],
-                            'data_source': 'ML Prediction',
-                            'asset_class': 'crypto' if symbol in crypto_symbols else 'stocks'
+                            'current_price': price_data['current_price'],
+                            'formatted_price': formatted_price,
+                            'change_24h': change,
+                            'volume': price_data['volume'],
+                            'forecast_direction': 'UP' if change > 0.01 else 'DOWN' if change < -0.01 else 'HOLD',
+                            'confidence': min(90, max(70, 80 + abs(change) * 10)),
+                            'predicted_range': predicted_range,
+                            'data_source': 'Economic Simulation',
+                            'asset_class': 'macro'
                         })
-                    except Exception as e:
-                        pass
+
+            
+            # No fallback data - only use real stream data
 
             
             # Cache the data for 1 second for real-time updates
