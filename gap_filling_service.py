@@ -36,11 +36,18 @@ class GapFillingService:
             'GDP': 'GDP', 'CPI': 'CPI', 'UNEMPLOYMENT': 'UNEMPLOYMENT', 'FED_RATE': 'FED_RATE', 'CONSUMER_CONFIDENCE': 'CONSUMER_CONFIDENCE'
         }
         
-        # All timeframes
-        timeframes = ['1m', '5m', '15m', '1h', '4H', '1D', '1W']
+        # Define timeframes per asset type
+        crypto_stock_timeframes = ['1m', '5m', '15m', '1h', '4H', '1D', '1W']
+        macro_timeframes = ['1W', '1M']
         
         for symbol in all_symbols.keys():
             print(f"🔄 Gap filling: Processing {symbol}")
+            # Use appropriate timeframes based on symbol type
+            if symbol in ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']:
+                timeframes = macro_timeframes
+            else:
+                timeframes = crypto_stock_timeframes
+                
             for timeframe in timeframes:
                 try:
                     await self._ensure_month_data(symbol, timeframe)
@@ -85,12 +92,15 @@ class GapFillingService:
             '1h': 24,      # 24
             '4H': 6,       # 24 / 4
             '1D': 1,       # 1
-            '1W': 1        # 1 per week, so ~4 per month
+            '1W': 1,       # 1 per week, so ~4 per month
+            '1M': 1        # 1 per month
         }
         
         daily_records = records_per_day.get(timeframe, 24)
         if timeframe == '1W':
             return 4  # 4 weeks
+        elif timeframe == '1M':
+            return 12  # 12 months
         return daily_records * 30  # 30 days
     
     async def _generate_historical_data(self, timeframe_symbol, timeframe, needed_count):
@@ -132,7 +142,7 @@ class GapFillingService:
         """Get interval in minutes for timeframe"""
         intervals = {
             '1m': 1, '5m': 5, '15m': 15, '1h': 60,
-            '4H': 240, '1D': 1440, '1W': 10080
+            '4H': 240, '1D': 1440, '1W': 10080, '1M': 43200
         }
         return intervals.get(timeframe, 60)
     

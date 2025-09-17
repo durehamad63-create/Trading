@@ -22,13 +22,15 @@ class TrendAnalyzer:
         self.crypto_symbols = ['BTC', 'ETH', 'XRP', 'BNB', 'SOL', 'DOGE', 'ADA', 'TRX']
         self.stablecoin_symbols = ['USDT', 'USDC']  # Handle separately
         self.stock_symbols = ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM']
-        self.all_symbols = self.crypto_symbols + self.stablecoin_symbols + self.stock_symbols
+        self.macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
+        self.all_symbols = self.crypto_symbols + self.stablecoin_symbols + self.stock_symbols + self.macro_symbols
         # Binance symbol mapping
         self.binance_mapping = {
             'USDT': 'BTCUSDT',  # Use BTC price for USDT reference
             'USDC': 'BTCUSDT'   # Use BTC price for USDC reference
         }
         self.timeframes = ['1m', '5m', '15m', '1h', '4H', '1D', '1W']
+        self.macro_timeframes = ['1W', '1M']  # Macro indicators update weekly/monthly
         self.binance_intervals = {
             '1m': '1m', '5m': '5m', '15m': '15m', '1h': '1h',
             '4H': '4h', '1D': '1d', '1W': '1w'
@@ -56,6 +58,8 @@ class TrendAnalyzer:
         """Get 7 days of data for specific symbol and timeframe"""
         if symbol in self.crypto_symbols or symbol in self.stablecoin_symbols:
             return await self.get_crypto_data(symbol, timeframe)
+        elif symbol in self.macro_symbols:
+            return await self.get_macro_data(symbol, timeframe)
         else:
             return await self.get_stock_data(symbol, timeframe)
     
@@ -227,6 +231,70 @@ class TrendAnalyzer:
                 })
         
         return data
+    
+    async def get_macro_data(self, symbol, timeframe):
+        """Generate synthetic macro economic data"""
+        try:
+            # Base values for macro indicators
+            base_values = {
+                'GDP': 27000,
+                'CPI': 310.5,
+                'UNEMPLOYMENT': 3.7,
+                'FED_RATE': 5.25,
+                'CONSUMER_CONFIDENCE': 102.3
+            }
+            
+            # Calculate number of data points needed (macro indicators have fewer data points)
+            required_records = {'1W': 52, '1M': 12}  # 52 weeks or 12 months of data
+            total_needed = required_records.get(timeframe, 52)
+            
+            data = []
+            base_value = base_values.get(symbol, 100)
+            
+            # Generate historical data points
+            for i in range(total_needed):
+                # Calculate timestamp based on timeframe
+                if timeframe == '1m':
+                    timestamp = datetime.now() - timedelta(minutes=total_needed - i)
+                elif timeframe == '5m':
+                    timestamp = datetime.now() - timedelta(minutes=(total_needed - i) * 5)
+                elif timeframe == '15m':
+                    timestamp = datetime.now() - timedelta(minutes=(total_needed - i) * 15)
+                elif timeframe == '1h':
+                    timestamp = datetime.now() - timedelta(hours=total_needed - i)
+                elif timeframe == '4H':
+                    timestamp = datetime.now() - timedelta(hours=(total_needed - i) * 4)
+                elif timeframe == '1D':
+                    timestamp = datetime.now() - timedelta(days=total_needed - i)
+                elif timeframe == '1W':
+                    timestamp = datetime.now() - timedelta(weeks=total_needed - i)
+                elif timeframe == '1M':
+                    timestamp = datetime.now() - timedelta(days=(total_needed - i) * 30)
+                else:
+                    timestamp = datetime.now() - timedelta(weeks=total_needed - i)
+                
+                # Add small random variations (macro data changes slowly)
+                if timeframe == '1M':
+                    variation = random.uniform(-0.01, 0.01)  # 1% monthly variation
+                else:
+                    variation = random.uniform(-0.005, 0.005)  # 0.5% weekly variation
+                current_value = base_value * (1 + variation)
+                
+                data.append({
+                    'timestamp': timestamp,
+                    'open': current_value,
+                    'high': current_value * 1.001,
+                    'low': current_value * 0.999,
+                    'close': current_value,
+                    'volume': 1000000  # Synthetic volume
+                })
+            
+            logging.info(f"✅ {symbol} {timeframe}: Generated {len(data)} macro data points")
+            return data
+            
+        except Exception as e:
+            logging.error(f"❌ Failed to generate macro data for {symbol} {timeframe}: {e}")
+            return []
     
     def generate_realistic_predictions(self, data, timeframe):
         """Generate realistic trend-based predictions with variation"""
@@ -436,7 +504,7 @@ class TrendAnalyzer:
     
     async def analyze(self):
         """Main analysis function for all 20 assets and timeframes"""
-        logging.info("🔄 Starting 7-day data collection for all 20 assets...")
+        logging.info(f"🔄 Starting 7-day data collection for all {len(self.all_symbols)} assets...")
         
         # Clean database first
         await self.clean_database()
@@ -445,9 +513,12 @@ class TrendAnalyzer:
         timeframe_count = 0
         
         for i, symbol in enumerate(self.all_symbols):
-            logging.info(f"📊 Processing {symbol} ({i+1}/20)...")
+            logging.info(f"📊 Processing {symbol} ({i+1}/{len(self.all_symbols)})...")
             
-            for timeframe in self.timeframes:
+            # Use appropriate timeframes based on symbol type
+            symbol_timeframes = self.macro_timeframes if symbol in self.macro_symbols else self.timeframes
+            
+            for timeframe in symbol_timeframes:
                 try:
                     logging.info(f"  📊 {symbol} {timeframe} timeframe...")
                 
@@ -489,7 +560,8 @@ class TrendAnalyzer:
         
         logging.info(f"✅ Analysis completed for all {len(self.all_symbols)} assets and {len(self.timeframes)} timeframes!")
         logging.info(f"📊 Total data points collected: {len(self.all_symbols) * len(self.timeframes) * 50}")
-        logging.info(f"🎯 Average accuracy across all assets: {avg_accuracy:.1f}%")
+        if timeframe_count > 0:
+            logging.info(f"🎯 Average accuracy across all assets: {avg_accuracy:.1f}%")
 
 async def main():
     analyzer = TrendAnalyzer()

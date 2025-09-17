@@ -128,7 +128,7 @@ class MacroRealtimeService:
         """Store macro data for all timeframes"""
         try:
             current_time = datetime.now()
-            timeframes = ['1h', '4H', '1D', '1W', '1M']
+            timeframes = ['1W', '1M']  # Macro indicators only update weekly/monthly
             
             for timeframe in timeframes:
                 timeframe_symbol = f"{symbol}_{timeframe}"

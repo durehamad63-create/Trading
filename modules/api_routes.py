@@ -623,7 +623,7 @@ def setup_routes(app: FastAPI, model, database=None):
             print(f"🔄 Using stock service for {symbol}, service available: {service is not None}", flush=True)
             sys.stdout.flush()
         else:  # is_macro
-            timeframe = "1D"
+            timeframe = "1W"  # Macro indicators use weekly timeframe
             service = macro_realtime_service
             print(f"🔄 Using macro service for {symbol}, service available: {service is not None}", flush=True)
             sys.stdout.flush()
@@ -1236,9 +1236,10 @@ def setup_routes(app: FastAPI, model, database=None):
                 # Get data from all services
                 assets = []
                 
-                # Crypto data
+                # All crypto symbols
+                crypto_symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX']
                 if realtime_service and hasattr(realtime_service, 'price_cache'):
-                    for symbol in ['BTC', 'ETH', 'BNB', 'XRP', 'SOL']:
+                    for symbol in crypto_symbols:
                         if symbol in realtime_service.price_cache:
                             price_data = realtime_service.price_cache[symbol]
                             assets.append({
@@ -1250,9 +1251,10 @@ def setup_routes(app: FastAPI, model, database=None):
                                 'asset_class': 'crypto'
                             })
                 
-                # Stock data
+                # All stock symbols
+                stock_symbols = ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM']
                 if stock_realtime_service and hasattr(stock_realtime_service, 'price_cache'):
-                    for symbol in ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN']:
+                    for symbol in stock_symbols:
                         if symbol in stock_realtime_service.price_cache:
                             price_data = stock_realtime_service.price_cache[symbol]
                             assets.append({
@@ -1264,9 +1266,10 @@ def setup_routes(app: FastAPI, model, database=None):
                                 'asset_class': 'stocks'
                             })
                 
-                # Macro data
+                # All macro symbols
+                macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
                 if macro_realtime_service and hasattr(macro_realtime_service, 'price_cache'):
-                    for symbol in ['GDP', 'CPI', 'UNEMPLOYMENT']:
+                    for symbol in macro_symbols:
                         if symbol in macro_realtime_service.price_cache:
                             price_data = macro_realtime_service.price_cache[symbol]
                             assets.append({

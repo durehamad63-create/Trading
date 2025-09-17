@@ -59,7 +59,7 @@ class TradingDatabase:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS forecasts (
                     id SERIAL PRIMARY KEY,
-                    symbol VARCHAR(20) NOT NULL,
+                    symbol VARCHAR(30) NOT NULL,
                     forecast_direction VARCHAR(10) NOT NULL,
                     confidence INTEGER NOT NULL,
                     predicted_price DECIMAL(15,2),
@@ -73,7 +73,7 @@ class TradingDatabase:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS actual_prices (
                     id SERIAL PRIMARY KEY,
-                    symbol VARCHAR(20) NOT NULL,
+                    symbol VARCHAR(30) NOT NULL,
                     timeframe VARCHAR(10) NOT NULL,
                     open_price DECIMAL(15,2),
                     high DECIMAL(15,2),
@@ -93,6 +93,10 @@ class TradingDatabase:
                 await conn.execute("ALTER TABLE actual_prices ADD COLUMN IF NOT EXISTS high DECIMAL(15,2)")
                 await conn.execute("ALTER TABLE actual_prices ADD COLUMN IF NOT EXISTS low DECIMAL(15,2)")
                 await conn.execute("ALTER TABLE actual_prices ADD COLUMN IF NOT EXISTS close_price DECIMAL(15,2)")
+                # Extend symbol column length for existing tables
+                await conn.execute("ALTER TABLE actual_prices ALTER COLUMN symbol TYPE VARCHAR(30)")
+                await conn.execute("ALTER TABLE forecasts ALTER COLUMN symbol TYPE VARCHAR(30)")
+                await conn.execute("ALTER TABLE user_favorites ALTER COLUMN symbol TYPE VARCHAR(30)")
             except Exception as e:
                 pass
             
@@ -114,7 +118,7 @@ class TradingDatabase:
                 CREATE TABLE IF NOT EXISTS user_favorites (
                     id SERIAL PRIMARY KEY,
                     user_id VARCHAR(50) DEFAULT 'default_user',
-                    symbol VARCHAR(20) NOT NULL,
+                    symbol VARCHAR(30) NOT NULL,
                     added_at TIMESTAMP DEFAULT NOW(),
                     UNIQUE(user_id, symbol)
                 )
