@@ -464,35 +464,30 @@ def setup_routes(app: FastAPI, model, database=None):
             self.user_sessions = {}       # Track user sessions for pooling
         
         async def get_or_create_connection(self, websocket: WebSocket, symbol: str, timeframe: str):
-            """Efficient connection pooling with user session tracking"""
-            user_id = id(websocket)
-            connection_key = f"{symbol}_{timeframe}_{user_id}"
-            
-            if symbol not in self.active_connections:
-                self.active_connections[symbol] = {}
-                self.connection_locks[symbol] = asyncio.Lock()
-            
-            # Track user sessions for better pooling
-            if user_id not in self.user_sessions:
-                self.user_sessions[user_id] = {
-                    'connections': set(),
-                    'created_at': datetime.now()
-                }
-            
-            async with self.connection_locks[symbol]:
-                # Create optimized connection
+            """Simple connection creation"""
+            print(f"🔧 Creating connection for {symbol}")
+            try:
+                user_id = id(websocket)
+                connection_key = f"{symbol}_{timeframe}_{user_id}"
+                print(f"🔑 Connection key: {connection_key}")
+                
+                if symbol not in self.active_connections:
+                    self.active_connections[symbol] = {}
+                    print(f"📁 Created new symbol entry for {symbol}")
+                
+                # Create simple connection
                 self.active_connections[symbol][connection_key] = {
                     'websocket': websocket,
                     'symbol': symbol,
                     'timeframe': timeframe,
-                    'user_id': user_id,
-                    'connected_at': datetime.now(),
-                    'last_ping': datetime.now(),
-                    'message_count': 0
+                    'connected_at': datetime.now()
                 }
+                print(f"✅ Connection stored for {symbol}")
                 
-                self.user_sessions[user_id]['connections'].add(connection_key)
                 return connection_key
+            except Exception as e:
+                print(f"❌ Error in get_or_create_connection: {e}")
+                raise
         
         async def update_connection_state(self, symbol: str, connection_id: str, **updates):
             """Update connection state without recreating"""
@@ -584,6 +579,7 @@ def setup_routes(app: FastAPI, model, database=None):
     async def asset_forecast_websocket(websocket: WebSocket, symbol: str):
         """Real-time forecast WebSocket with improved connection management"""
         print(f"🔌 WebSocket connection attempt for {symbol}")
+        print(f"🔍 Services status: realtime={realtime_service is not None}, stock={stock_realtime_service is not None}, macro={macro_realtime_service is not None}")
         
         try:
             await websocket.accept()
@@ -624,24 +620,36 @@ def setup_routes(app: FastAPI, model, database=None):
         
         if not service:
             print(f"❌ Service unavailable for {symbol}")
-            await websocket.close(code=1000, reason="Service unavailable")
+            try:
+                await websocket.close(code=1000, reason="Service unavailable")
+            except Exception as e:
+                print(f"❌ Error closing websocket: {e}")
             return
         
         # Use connection manager for better connection handling
         try:
+            print(f"🔧 Creating connection manager entry for {symbol}")
             connection_id = await manager.get_or_create_connection(websocket, symbol, timeframe)
             print(f"✅ Connection manager created ID: {connection_id}")
         except Exception as e:
             print(f"❌ Connection manager failed for {symbol}: {e}")
-            await websocket.close(code=1000, reason="Connection manager failed")
+            import traceback
+            print(f"📋 Traceback: {traceback.format_exc()}")
+            try:
+                await websocket.close(code=1000, reason="Connection manager failed")
+            except:
+                pass
             return
         
         try:
+            print(f"🔗 Adding connection to service for {symbol}")
             # Add to service with connection pooling
             await service.add_connection(websocket, symbol, connection_id, timeframe)
             print(f"✅ Added to service for {symbol}")
         except Exception as e:
             print(f"❌ Service add_connection failed for {symbol}: {e}")
+            import traceback
+            print(f"📋 Traceback: {traceback.format_exc()}")
             try:
                 await websocket.close(code=1000, reason="Service connection failed")
             except:
@@ -1333,6 +1341,30 @@ def setup_routes(app: FastAPI, model, database=None):
                 await manager.safe_disconnect(websocket, "market_summary", connection_id)
             except Exception:
                 pass
+    
+    @app.websocket("/ws/test")
+    async def test_websocket(websocket: WebSocket):
+        """Simple test WebSocket to verify basic functionality"""
+        print("🧪 Test WebSocket connection attempt")
+        try:
+            await websocket.accept()
+            print("✅ Test WebSocket accepted")
+            
+            # Simple ping loop
+            count = 0
+            while True:
+                count += 1
+                await asyncio.sleep(2)
+                test_data = {
+                    "type": "test",
+                    "count": count,
+                    "timestamp": datetime.now().isoformat()
+                }
+                await websocket.send_text(json.dumps(test_data))
+                print(f"📡 Sent test message #{count}")
+                
+        except Exception as e:
+            print(f"❌ Test WebSocket error: {e}")
     
     @app.websocket("/ws/mobile")
     async def deprecated_mobile_websocket(websocket: WebSocket):
