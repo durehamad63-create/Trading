@@ -94,19 +94,26 @@ class MobileMLModel:
         self.redis_client = None
         try:
             import redis
+            redis_host = os.getenv('REDIS_HOST', 'localhost')
+            redis_port = int(os.getenv('REDIS_PORT', '6379'))
+            redis_password = os.getenv('REDIS_PASSWORD', None) if os.getenv('REDIS_PASSWORD') else None
+            
+            print(f"🔄 ML Model connecting to Redis: {redis_host}:{redis_port}")
+            
             self.redis_client = redis.Redis(
-                host=os.getenv('REDIS_HOST', 'localhost'),
-                port=int(os.getenv('REDIS_PORT', '6379')),
+                host=redis_host,
+                port=redis_port,
                 db=int(os.getenv('REDIS_ML_DB', '2')),  # Use DB 2 for ML cache
-                password=os.getenv('REDIS_PASSWORD', None) if os.getenv('REDIS_PASSWORD') else None,
+                password=redis_password,
                 decode_responses=True,
                 socket_connect_timeout=5,
                 socket_timeout=5
             )
             self.redis_client.ping()
-            pass
+            print(f"✅ ML Redis connected: {redis_host}:{redis_port} (DB {os.getenv('REDIS_ML_DB', '2')})")
         except Exception as e:
-            pass
+            print(f"⚠️ ML Redis connection failed: {e}")
+            print("🔄 ML using memory cache fallback")
             self.redis_client = None
     
     def _download_model_from_drive(self, model_path):

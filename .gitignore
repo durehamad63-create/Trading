@@ -7,3 +7,8 @@ requirements of project.txt
 .env
 test_all_assets.py
 test_results.json
+Trading_AI_API.postman_collection.json
+Trading_AI_WebSockets_v2.postman_collection.json
+Trading_AI_WebSockets.postman_collection.json
+WebSocket_Postman_Instructions.md
+test_railway_api.py

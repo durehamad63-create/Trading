@@ -64,19 +64,26 @@ def setup_routes(app: FastAPI, model, database=None):
     redis_client = None
     try:
         import redis
+        redis_host = os.getenv('REDIS_HOST', 'localhost')
+        redis_port = int(os.getenv('REDIS_PORT', '6379'))
+        redis_password = os.getenv('REDIS_PASSWORD', None) if os.getenv('REDIS_PASSWORD') else None
+        
+        print(f"🔄 Connecting to Redis: {redis_host}:{redis_port}")
+        
         redis_client = redis.Redis(
-            host=os.getenv('REDIS_HOST', 'localhost'),
-            port=int(os.getenv('REDIS_PORT', '6379')),
+            host=redis_host,
+            port=redis_port,
             db=int(os.getenv('REDIS_PREDICTION_DB', '1')),  # Use DB 1 for predictions
-            password=os.getenv('REDIS_PASSWORD', None) if os.getenv('REDIS_PASSWORD') else None,
+            password=redis_password,
             decode_responses=True,
             socket_connect_timeout=5,
             socket_timeout=5
         )
         redis_client.ping()
-        pass
+        print(f"✅ Redis connected: {redis_host}:{redis_port}")
     except Exception as e:
-        pass
+        print(f"⚠️ Redis connection failed: {e}")
+        print("🔄 Using memory cache fallback")
         redis_client = None
     
     async def get_ml_prediction(symbol: str):
