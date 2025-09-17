@@ -60,7 +60,7 @@ def setup_routes(app: FastAPI, model, database=None):
     def get_cache_ttl(symbol):
         return 30 if symbol in HOT_SYMBOLS else cache_timeout
     
-    # Initialize Redis for distributed caching
+    # Initialize Redis for distributed caching with Railway compatibility
     redis_client = None
     try:
         import redis
@@ -70,17 +70,32 @@ def setup_routes(app: FastAPI, model, database=None):
         
         print(f"🔄 Connecting to Redis: {redis_host}:{redis_port}")
         
+        # Railway Redis: Try DB 0 first (default), then fallback to no DB selection
+        redis_db = 0  # Railway typically uses DB 0
+        
         redis_client = redis.Redis(
             host=redis_host,
             port=redis_port,
-            db=int(os.getenv('REDIS_PREDICTION_DB', '1')),  # Use DB 1 for predictions
+            db=redis_db,
             password=redis_password,
             decode_responses=True,
-            socket_connect_timeout=5,
-            socket_timeout=5
+            socket_connect_timeout=10,
+            socket_timeout=10
         )
+        
+        # Test connection
         redis_client.ping()
-        print(f"✅ Redis connected: {redis_host}:{redis_port}")
+        
+        # Test set/get to ensure DB is writable
+        test_key = "api_test_key"
+        redis_client.setex(test_key, 5, "test_value")
+        test_result = redis_client.get(test_key)
+        
+        if test_result == "test_value":
+            print(f"✅ Redis connected and operational: {redis_host}:{redis_port} (DB {redis_db})")
+        else:
+            raise Exception("Redis read/write test failed")
+            
     except Exception as e:
         print(f"⚠️ Redis connection failed: {e}")
         print("🔄 Using memory cache fallback")
@@ -152,7 +167,7 @@ def setup_routes(app: FastAPI, model, database=None):
             # Check Redis cache first, then memory cache
             if redis_client:
                 try:
-                    cache_key = CacheKeys.prediction(symbol)
+                    cache_key = f"prediction:{symbol}"
                     cached_data = redis_client.get(cache_key)
                     if cached_data:
                         import json
@@ -178,7 +193,7 @@ def setup_routes(app: FastAPI, model, database=None):
                 if redis_client:
                     try:
                         import json
-                        cache_key = CacheKeys.prediction(symbol)
+                        cache_key = f"prediction:{symbol}"
                         redis_client.setex(cache_key, cache_timeout, json.dumps(prediction))
                     except Exception as e:
                         pass
@@ -1133,7 +1148,7 @@ def setup_routes(app: FastAPI, model, database=None):
         
         async def get_cached_market_data():
             """Get market data from Redis cache or generate if not cached"""
-            cache_key = CacheKeys.market_summary()
+            cache_key = "market_summary:all"
             
             # Try Redis cache first
             if redis_client:
@@ -1205,10 +1220,10 @@ def setup_routes(app: FastAPI, model, database=None):
             # No fallback data - only use real stream data
 
             
-            # Cache the data for 1 second for real-time updates
+            # Cache the data for 2 seconds for real-time updates
             if redis_client and assets:
                 try:
-                    redis_client.setex(cache_key, 1, json.dumps(assets))
+                    redis_client.setex(cache_key, 2, json.dumps(assets))
                     crypto_count = len([a for a in assets if a.get('asset_class') == 'crypto'])
                     stock_count = len([a for a in assets if a.get('asset_class') == 'stocks'])
                 except Exception as e:

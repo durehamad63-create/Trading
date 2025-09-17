@@ -90,7 +90,7 @@ class MobileMLModel:
             else:
                 raise Exception(f"Cannot start: {str(e)}")
         
-        # Initialize Redis for ML model caching
+        # Initialize Redis for ML model caching with Railway compatibility
         self.redis_client = None
         try:
             import redis
@@ -100,17 +100,32 @@ class MobileMLModel:
             
             print(f"🔄 ML Model connecting to Redis: {redis_host}:{redis_port}")
             
+            # Railway Redis: Use DB 0 (default) for all caches
+            redis_db = 0
+            
             self.redis_client = redis.Redis(
                 host=redis_host,
                 port=redis_port,
-                db=int(os.getenv('REDIS_ML_DB', '2')),  # Use DB 2 for ML cache
+                db=redis_db,
                 password=redis_password,
                 decode_responses=True,
-                socket_connect_timeout=5,
-                socket_timeout=5
+                socket_connect_timeout=10,
+                socket_timeout=10
             )
+            
+            # Test connection and write capability
             self.redis_client.ping()
-            print(f"✅ ML Redis connected: {redis_host}:{redis_port} (DB {os.getenv('REDIS_ML_DB', '2')})")
+            
+            # Test ML cache functionality
+            test_key = "ml_test_key"
+            self.redis_client.setex(test_key, 5, "ml_test_value")
+            test_result = self.redis_client.get(test_key)
+            
+            if test_result == "ml_test_value":
+                print(f"✅ ML Redis connected and operational: {redis_host}:{redis_port} (DB {redis_db})")
+            else:
+                raise Exception("ML Redis read/write test failed")
+            
         except Exception as e:
             print(f"⚠️ ML Redis connection failed: {e}")
             print("🔄 ML using memory cache fallback")
@@ -157,7 +172,7 @@ class MobileMLModel:
         """Generate real model prediction with Redis caching"""
         import time
         current_time = time.time()
-        cache_key = CacheKeys.prediction(symbol)
+        cache_key = f"ml:{symbol}:prediction"
         
         # Check Redis cache first
         if self.redis_client:
