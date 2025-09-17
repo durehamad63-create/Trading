@@ -245,7 +245,22 @@ class MobileMLModel:
             xgb_prediction += market_noise
             
             predicted_price = current_price * (1 + xgb_prediction)
-            confidence = min(95, max(70, 80 + abs(xgb_prediction) * 100))
+            
+            # Dynamic confidence based on multiple factors
+            volatility_factor = abs(change_24h) * 0.5
+            prediction_strength = abs(xgb_prediction) * 200
+            market_stability = min(10, abs(change_24h)) * 2
+            
+            # Base confidence varies by symbol type
+            if symbol in ['BTC', 'ETH']:
+                base_confidence = 75
+            elif symbol in ['USDT', 'USDC']:
+                base_confidence = 90
+            else:
+                base_confidence = 70
+            
+            confidence = base_confidence + prediction_strength - volatility_factor + np.random.uniform(-5, 5)
+            confidence = min(95, max(50, confidence))
             
             # logging.info(f"🔥 REAL DATA: {symbol} price=${current_price} from API, ML prediction={xgb_prediction:.4f}")
             
