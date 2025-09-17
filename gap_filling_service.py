@@ -161,7 +161,7 @@ class GapFillingService:
                 for data_point in data_points:
                     # Store actual price
                     await conn.execute("""
-                        INSERT INTO actual_prices (symbol, current_price, change_24h, volume, timestamp)
+                        INSERT INTO actual_prices (symbol, price, change_24h, volume, timestamp)
                         VALUES ($1, $2, $3, $4, $5)
                         ON CONFLICT (symbol, timestamp) DO NOTHING
                     """, timeframe_symbol, data_point['current_price'], data_point['change_24h'],
@@ -174,9 +174,9 @@ class GapFillingService:
                             prediction = await self.model.predict(symbol)
                             
                             await conn.execute("""
-                                INSERT INTO forecasts (symbol, forecast_direction, confidence, predicted_price, predicted_range, timestamp)
+                                INSERT INTO forecasts (symbol, forecast_direction, confidence, predicted_price, predicted_range, created_at)
                                 VALUES ($1, $2, $3, $4, $5, $6)
-                                ON CONFLICT (symbol, timestamp) DO NOTHING
+                                ON CONFLICT DO NOTHING
                             """, timeframe_symbol, prediction.get('forecast_direction', 'HOLD'),
                                 prediction.get('confidence', 75), prediction.get('predicted_price', data_point['current_price']),
                                 prediction.get('predicted_range', 'N/A'), data_point['timestamp'])
