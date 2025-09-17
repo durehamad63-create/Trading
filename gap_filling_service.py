@@ -19,13 +19,11 @@ class GapFillingService:
     async def fill_missing_data(self, db_instance):
         """Fill missing data for all symbols since last stored timestamp"""
         if not db_instance or not db_instance.pool:
-            logging.warning("⚠️ Database not connected, skipping gap filling")
+            pass
             return
         
         self.db = db_instance
             
-        logging.info("🔄 Starting gap filling process...")
-        
         for symbol in self.binance_symbols.keys():
             success = False
             for attempt in range(3):  # 3 retry attempts
@@ -41,8 +39,6 @@ class GapFillingService:
             
             if success:
                 await asyncio.sleep(0.5)  # Rate limiting delay
-        
-        logging.info("✅ Gap filling completed")
     
     async def _fill_symbol_gaps(self, symbol):
         """Fill gaps for a specific symbol"""
@@ -62,18 +58,14 @@ class GapFillingService:
         if (end_time - start_time).total_seconds() < 60:
             return
         
-
-        
         # Fetch historical data from Binance
         historical_data = await self._fetch_binance_klines(symbol, start_time, end_time)
         
         if historical_data:
             await self.db.store_historical_batch(symbol, historical_data)
-
             
             # Skip forecast generation for historical data to improve performance
             # await self._fill_missing_forecasts(symbol, historical_data)
-            logging.info(f"✅ Filled {len(historical_data)} data points for {symbol}")
     
     async def _fetch_binance_klines(self, symbol, start_time, end_time):
         """Fetch historical klines from Binance API with retry logic"""
@@ -140,12 +132,9 @@ class GapFillingService:
     async def _fill_missing_forecasts(self, symbol, historical_data):
         """Generate and store forecasts for historical price data"""
         if not self.model:
-            logging.warning(f"⚠️ No model available for forecasts, skipping {symbol}")
             return
             
         try:
-
-            
             for data_point in historical_data:
                 # Generate forecast for this historical price
                 try:
@@ -170,13 +159,10 @@ class GapFillingService:
                             forecast_data['trend_score'], data_point['timestamp'])
                     
                 except Exception as e:
-                    logging.warning(f"Failed to generate forecast for {symbol} at {data_point['timestamp']}: {e}")
                     continue
             
-
-            
         except Exception as e:
-            logging.error(f"❌ Failed to fill missing forecasts for {symbol}: {e}")
+            pass
 
 # Global gap filling service
 gap_filler = GapFillingService()

@@ -34,9 +34,9 @@ class TradingDatabase:
                 }
             )
             await self.create_tables()
-            logging.info(f"✅ Database connected with pool: min={self.pool._minsize}, max={self.pool._maxsize}")
+            pass
         except Exception as e:
-            logging.error(f"❌ Database connection failed: {e}")
+            pass
             self.pool = None
     
     def get_pool_stats(self):
@@ -94,7 +94,7 @@ class TradingDatabase:
                 await conn.execute("ALTER TABLE actual_prices ADD COLUMN IF NOT EXISTS low DECIMAL(15,2)")
                 await conn.execute("ALTER TABLE actual_prices ADD COLUMN IF NOT EXISTS close_price DECIMAL(15,2)")
             except Exception as e:
-                logging.warning(f"Column addition warning: {e}")
+                pass
             
             # Accuracy tracking table
             await conn.execute("""
@@ -170,7 +170,7 @@ class TradingDatabase:
             except Exception as e:
                 # Silently handle duplicates for high-frequency data
                 if "duplicate key" not in str(e).lower():
-                    logging.error(f"❌ Failed to store price for {symbol}: {e}")
+                    pass
     
     async def get_last_stored_time(self, symbol):
         """Get last stored timestamp for a symbol"""
@@ -206,7 +206,7 @@ class TradingDatabase:
                         data.get('volume', 0),
                         data['timestamp'])
                 except Exception as e:
-                    logging.warning(f"Failed to insert data point: {e}")
+                    pass
                     pass  # Skip duplicates
     
     async def get_historical_forecasts(self, symbol, days=30):
@@ -290,10 +290,9 @@ class TradingDatabase:
             
             cached_data = redis_client.get(cache_key)
             if cached_data:
-                logging.info(f"✅ Redis cache hit for {cache_key}")
                 return json.loads(cached_data)
         except Exception as e:
-            logging.warning(f"⚠️ Redis cache failed for {cache_key}: {e}")
+            pass
             redis_client = None
             
         days = {'1D': 7, '7D': 7, '1M': 30, '1Y': 365, '4H': 7, '4h': 7, '5m': 7, '15m': 7, '30m': 7, '1h': 7, '1W': 30}.get(timeframe, 7)
@@ -332,7 +331,7 @@ class TradingDatabase:
                     
                     redis_client.setex(cache_key, ttl, json.dumps(chart_data))
                 except Exception as e:
-                    logging.warning(f"⚠️ Failed to cache chart data: {e}")
+                    pass
             
             return chart_data
     

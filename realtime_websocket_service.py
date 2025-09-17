@@ -35,18 +35,13 @@ class RealTimeWebSocketService:
     
     async def start_binance_streams(self):
         """Start Binance WebSocket streams for all symbols immediately"""
-        # Start all symbols immediately
+        # Start all symbols immediately with minimal delay
         for symbol, binance_symbol in self.binance_symbols.items():
             asyncio.create_task(self._binance_stream(symbol, binance_symbol))
-            await asyncio.sleep(0.01)  # Minimal delay between connections
+            await asyncio.sleep(0.1)  # Reduced to 100ms delay
         
         # Handle stablecoins separately with fixed prices
         asyncio.create_task(self._handle_stablecoins())
-        
-
-    
-
-    
     async def _handle_stablecoins(self):
         """Handle stablecoins with fixed prices"""
         stablecoins = ['USDT', 'USDC']
@@ -75,8 +70,7 @@ class RealTimeWebSocketService:
         while True:
             try:
                 async with websockets.connect(uri) as websocket:
-
-                    
+                    print(f"✅ Connected: {symbol} stream active")
                     async for message in websocket:
                         try:
                             data = json.loads(message)
@@ -93,8 +87,6 @@ class RealTimeWebSocketService:
                                 'volume': volume,
                                 'timestamp': datetime.now()
                             }
-                            
-                            # Stream log removed
 
                             
                             # Always store data for all timeframes (regardless of connections)
@@ -283,7 +275,7 @@ class RealTimeWebSocketService:
                     # Generate fresh prediction in background (non-blocking)
                     asyncio.create_task(self._generate_fresh_prediction(symbol))
             except Exception as e:
-                logging.warning(f"Prediction cache failed for {symbol}: {e}")
+                pass
             
             # Send real-time price update (for live chart updates)
             realtime_data = {
@@ -326,10 +318,10 @@ class RealTimeWebSocketService:
             
             # Generate and store forecast for this timeframe
             try:
-                prediction = self.model.predict(symbol.split('_')[0])  # Remove timeframe from symbol
+                prediction = await self.model.predict(symbol.split('_')[0])  # Remove timeframe from symbol
                 await db.store_forecast(symbol, prediction)
             except Exception as e:
-                logging.warning(f"Failed to generate forecast for {symbol}: {e}")
+                pass
                 
         except Exception as e:
             ErrorHandler.log_database_error('store_realtime', symbol, str(e))
@@ -542,10 +534,10 @@ class RealTimeWebSocketService:
     async def _generate_fresh_prediction(self, symbol):
         """Generate fresh ML prediction in background"""
         try:
-            prediction = self.model.predict(symbol)
+            prediction = await self.model.predict(symbol)
             # Cache will be updated by model.predict() method
         except Exception as e:
-            logging.warning(f"Background prediction failed for {symbol}: {e}")
+            pass
     
     def remove_connection(self, symbol, connection_id):
         """Remove WebSocket connection"""

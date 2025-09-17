@@ -38,7 +38,7 @@ class AsyncTaskManager:
                 
             except Exception as e:
                 self.task_stats['failed_tasks'] += 1
-                logging.error(f"Task {task_id} failed: {e}")
+                pass
                 raise
             finally:
                 # Cleanup

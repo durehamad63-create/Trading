@@ -10,6 +10,7 @@ from typing import Dict
 # Removed yfinance import - using direct API calls
 import os
 from dotenv import load_dotenv
+from utils.error_handler import ErrorHandler
 
 class StockRealtimeService:
     def __init__(self, model=None, database=None):
@@ -55,27 +56,20 @@ class StockRealtimeService:
                 socket_timeout=5
             )
             self.redis_client.ping()
-            logging.info(f"✅ Stock Redis connected: {os.getenv('REDIS_HOST', 'localhost')}:{os.getenv('REDIS_PORT', '6379')}")
         except Exception as e:
-            logging.warning(f"⚠️ Stock Redis not available: {e}")
             self.redis_client = None
     
     async def start_stock_streams(self):
         """Start real-time data collection for all stocks"""
         self.session = aiohttp.ClientSession()
-        logging.info("🏢 Starting stock real-time streams...")
         
         # Start single rotating stream for all stocks
         asyncio.create_task(self._rotating_stock_stream())
-        
-        logging.info(f"✅ Rotating stock stream started for {len(self.stock_symbols)} symbols")
     
     async def _rotating_stock_stream(self):
         """Dual stream that processes two stocks simultaneously"""
         symbols = list(self.stock_symbols.keys())
         current_index = 0
-        
-        logging.info(f"🔄 Starting dual rotating stock stream for {len(symbols)} symbols")
         
         while True:
             try:
@@ -94,8 +88,8 @@ class StockRealtimeService:
                 # Move to next pair of symbols
                 current_index = (current_index + 2) % len(symbols)
                 
-                # Wait 0.1 second before next pair (completes full cycle in 0.5 seconds)
-                await asyncio.sleep(0.1)
+                # Wait 1 second before next pair (completes full cycle in 5 seconds)
+                await asyncio.sleep(1)
                 
             except Exception as e:
                 ErrorHandler.log_stream_error('stock_dual', 'ALL', str(e))
@@ -113,7 +107,7 @@ class StockRealtimeService:
                     'timestamp': datetime.now()
                 }
                 
-                # Log price updates removed
+
                 
                 # Always store data for all timeframes (regardless of connections)
                 asyncio.create_task(self._store_stock_data_all_timeframes(symbol, price_data))
@@ -150,7 +144,6 @@ class StockRealtimeService:
                         prev_close = meta['previousClose']
                         change_pct = ((current_price - prev_close) / prev_close) * 100
                         
-                        # logging.info(f"✅ Yahoo API success for {symbol}: ${current_price}")
                         return {
                             'current_price': float(current_price),
                             'change_24h': float(change_pct),
@@ -160,10 +153,9 @@ class StockRealtimeService:
                             'data_source': 'Yahoo Finance API'
                         }
                 elif response.status == 429:
-                    logging.warning(f"⚠️ Rate limited for {symbol}, will retry later")
                     return None
         except Exception as e:
-            logging.warning(f"⚠️ Yahoo API error for {symbol}: {e}")
+            pass
         
         # 2. Try Alpha Vantage if available
         try:
@@ -183,7 +175,7 @@ class StockRealtimeService:
                                 'data_source': 'Alpha Vantage'
                             }
         except Exception as e:
-            logging.warning(f"Alpha Vantage failed for {symbol}: {e}")
+            pass
         
         # 3. Try IEX Cloud if available
         try:
@@ -201,7 +193,7 @@ class StockRealtimeService:
                             'data_source': 'IEX Cloud'
                         }
         except Exception as e:
-            logging.warning(f"IEX Cloud failed for {symbol}: {e}")
+            pass
         
         return None
     
@@ -230,7 +222,6 @@ class StockRealtimeService:
                 # Generate timeframe-specific forecast
                 await self._generate_stock_forecast(symbol, timeframe, current_time)
                 self.last_update[rate_key] = current_time
-                logging.info(f"🤖 Generated ML forecast for {symbol} {timeframe}")
                 
         except Exception as e:
             ErrorHandler.log_stream_error('stock_candle', symbol, str(e))
@@ -373,10 +364,10 @@ class StockRealtimeService:
                     
                     # Generate and store forecast
                     try:
-                        prediction = self.model.predict(symbol)
+                        prediction = await self.model.predict(symbol)
                         await self.database.store_forecast(timeframe_symbol, prediction)
                     except Exception as e:
-                        logging.warning(f"Stock forecast failed for {timeframe_symbol}: {e}")
+                        pass
                         
         except Exception as e:
             ErrorHandler.log_database_error('stock_store_timeframes', 'ALL', str(e))
@@ -408,7 +399,7 @@ class StockRealtimeService:
                 if not isinstance(prediction, dict):
                     return
             except Exception as e:
-                logging.warning(f"Stock prediction failed for {symbol}: {e}")
+                pass
                 return
             
             # Create forecast data
@@ -441,10 +432,7 @@ class StockRealtimeService:
             }
             
             # Broadcast to connections
-            connections_count = len(self.active_connections.get(symbol, {}))
             await self._broadcast_to_timeframe(symbol, timeframe, forecast_data)
-            if connections_count > 0:
-                logging.info(f"📡 Broadcasted {symbol} forecast to {connections_count} WebSocket connections")
             
         except Exception as e:
             ErrorHandler.log_prediction_error('stock_forecast', str(e))
@@ -541,11 +529,7 @@ class StockRealtimeService:
                 forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
                 timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
             else:
-                # Generate synthetic data
-                current_price = self.price_cache.get(symbol, {}).get('current_price', 150)
-                actual_data = [current_price + (i * 2) for i in range(-25, 25)]
-                forecast_data = [price * 1.005 for price in actual_data]
-                timestamps = [(datetime.now() - timedelta(hours=25-i)).isoformat() for i in range(50)]
+                return  # Don't send data if no database data available
             
             historical_message = {
                 "type": "historical_data",  # Standardize message type
@@ -578,10 +562,10 @@ class StockRealtimeService:
     async def _generate_fresh_stock_prediction(self, symbol):
         """Generate fresh stock prediction in background"""
         try:
-            prediction = self.model.predict(symbol)
+            prediction = await self.model.predict(symbol)
             # Cache will be updated by model.predict() method
         except Exception as e:
-            logging.warning(f"Background stock prediction failed for {symbol}: {e}")
+            pass
     
     def remove_connection(self, symbol, connection_id):
         """Remove WebSocket connection"""

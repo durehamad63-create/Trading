@@ -1,7 +1,7 @@
 """
 Multi-asset support for stocks and macro indicators
 """
-import requests
+import aiohttp
 import numpy as np
 from datetime import datetime, timedelta
 import logging
@@ -19,19 +19,19 @@ class MultiAssetSupport:
         self.stock_symbols = list(STOCK_SYMBOLS.keys())
         self.macro_symbols = list(MACRO_SYMBOLS.keys())
     
-    def get_asset_data(self, symbol):
-        """Get current price and change for any asset type"""
+    async def get_asset_data(self, symbol):
+        """Get current price and change for any asset type - ASYNC"""
         if symbol in self.crypto_symbols:
-            return self._get_crypto_data(symbol)
+            return await self._get_crypto_data(symbol)
         elif symbol in self.stock_symbols:
-            return self._get_stock_data(symbol)
+            return await self._get_stock_data(symbol)
         elif symbol in self.macro_symbols:
             return self._get_macro_data(symbol)
         else:
             raise Exception(f"Unsupported symbol: {symbol}")
     
-    def _get_crypto_data(self, symbol):
-        """Get crypto data using centralized API client"""
+    async def _get_crypto_data(self, symbol):
+        """Get crypto data using centralized API client - ASYNC"""
         if symbol not in CRYPTO_SYMBOLS:
             raise Exception(f"Crypto symbol not supported: {symbol}")
         
@@ -47,8 +47,8 @@ class MultiAssetSupport:
         
         # Try Binance first
         if config.get('binance'):
-            price = APIClient.get_binance_price(config['binance'])
-            change = APIClient.get_binance_change(config['binance'])
+            price = await APIClient.get_binance_price(config['binance'])
+            change = await APIClient.get_binance_change(config['binance'])
             if price:
                 return {
                     'current_price': price,
@@ -58,8 +58,8 @@ class MultiAssetSupport:
         
         # Fallback to Yahoo
         if config.get('yahoo'):
-            price = APIClient.get_yahoo_price(config['yahoo'])
-            change = APIClient.get_yahoo_change(config['yahoo'])
+            price = await APIClient.get_yahoo_price(config['yahoo'])
+            change = await APIClient.get_yahoo_change(config['yahoo'])
             if price:
                 return {
                     'current_price': price,
@@ -69,14 +69,14 @@ class MultiAssetSupport:
         
         raise Exception(f"No data source available for {symbol}")
     
-    def _get_stock_data(self, symbol):
-        """Get stock data using centralized API client"""
+    async def _get_stock_data(self, symbol):
+        """Get stock data using centralized API client - ASYNC"""
         if symbol not in STOCK_SYMBOLS:
             raise Exception(f"Stock symbol not supported: {symbol}")
         
         config = STOCK_SYMBOLS[symbol]
-        price = APIClient.get_yahoo_price(config['yahoo'])
-        change = APIClient.get_yahoo_change(config['yahoo'])
+        price = await APIClient.get_yahoo_price(config['yahoo'])
+        change = await APIClient.get_yahoo_change(config['yahoo'])
         
         if price:
             return {
@@ -101,19 +101,19 @@ class MultiAssetSupport:
             'data_source': 'Economic Data'
         }
     
-    def get_historical_data(self, symbol, periods=100):
-        """Get historical data for any asset type"""
+    async def get_historical_data(self, symbol, periods=100):
+        """Get historical data for any asset type - ASYNC"""
         if symbol in self.crypto_symbols:
-            return self._get_crypto_historical(symbol, periods)
+            return await self._get_crypto_historical(symbol, periods)
         elif symbol in self.stock_symbols:
-            return self._get_stock_historical(symbol, periods)
+            return await self._get_stock_historical(symbol, periods)
         elif symbol in self.macro_symbols:
             return self._get_macro_historical(symbol, periods)
         else:
             raise Exception(f"Unsupported symbol: {symbol}")
     
-    def _get_crypto_historical(self, symbol, periods):
-        """Get crypto historical data from Binance"""
+    async def _get_crypto_historical(self, symbol, periods):
+        """Get crypto historical data from Binance - ASYNC"""
         symbol_map = {
             'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT', 'BNB': 'BNBUSDT',
             'XRP': 'XRPUSDT', 'SOL': 'SOLUSDT', 'DOGE': 'DOGEUSDT',
@@ -125,50 +125,55 @@ class MultiAssetSupport:
         if not binance_symbol:
             raise Exception(f"Crypto symbol not supported: {symbol}")
         
+        import aiohttp
         binance_url = os.getenv('BINANCE_API_URL', 'https://api.binance.com/api/v3')
         url = f"{binance_url}/klines?symbol={binance_symbol}&interval=1h&limit={periods}"
-        response = requests.get(url, timeout=15)
         
-        if response.status_code != 200:
-            raise Exception(f"Binance API failed: {response.status_code}")
-        
-        data = response.json()
-        prices = [float(kline[4]) for kline in data]  # Close price
-        volumes = [float(kline[5]) for kline in data]  # Volume
-        
-        return np.array(prices), np.array(volumes)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status != 200:
+                    raise Exception(f"Binance API failed: {response.status}")
+                
+                data = await response.json()
+                prices = [float(kline[4]) for kline in data]  # Close price
+                volumes = [float(kline[5]) for kline in data]  # Volume
+                
+                return np.array(prices), np.array(volumes)
     
-    def _get_stock_historical(self, symbol, periods):
-        """Get stock historical data using direct Yahoo Finance API"""
+    async def _get_stock_historical(self, symbol, periods):
+        """Get stock historical data using direct Yahoo Finance API - ASYNC"""
         try:
+            import aiohttp
             # Use 1d interval for better data availability
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=3mo"
-            response = requests.get(url, timeout=15)
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             
-            if response.status_code != 200:
-                raise Exception(f"Yahoo API failed: {response.status_code}")
-            
-            data = response.json()
-            result = data['chart']['result'][0]
-            
-            # Extract price and volume data
-            timestamps = result['timestamp']
-            indicators = result['indicators']['quote'][0]
-            
-            closes = [x for x in indicators['close'] if x is not None]
-            volumes = [x for x in indicators['volume'] if x is not None]
-            
-            if len(closes) == 0:
-                raise Exception(f"No valid price data for {symbol}")
-            
-            # Return last 'periods' data points
-            prices = np.array(closes[-periods:])
-            vols = np.array(volumes[-periods:] if len(volumes) >= len(prices) else [1000000] * len(prices))
-            
-            return prices, vols
-            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10), headers=headers) as response:
+                    if response.status != 200:
+                        raise Exception(f"Yahoo API failed: {response.status}")
+                    
+                    data = await response.json()
+                    result = data['chart']['result'][0]
+                    
+                    # Extract price and volume data
+                    timestamps = result['timestamp']
+                    indicators = result['indicators']['quote'][0]
+                    
+                    closes = [x for x in indicators['close'] if x is not None]
+                    volumes = [x for x in indicators['volume'] if x is not None]
+                    
+                    if len(closes) == 0:
+                        raise Exception(f"No valid price data for {symbol}")
+                    
+                    # Return last 'periods' data points
+                    prices = np.array(closes[-periods:])
+                    vols = np.array(volumes[-periods:] if len(volumes) >= len(prices) else [1000000] * len(prices))
+                    
+                    return prices, vols
+                
         except Exception as e:
-            logging.error(f"Yahoo Finance API historical failed for {symbol}: {e}")
+            pass
             raise Exception(f"Stock historical data failed for {symbol}: {str(e)}")
     
     def _get_macro_historical(self, symbol, periods):

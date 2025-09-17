@@ -7,143 +7,126 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 import logging
 import sys
 import os
-import numpy as np
 from contextlib import asynccontextmanager
 
-# Set up detailed logging for predictions
-logging.basicConfig(level=logging.INFO, format='%(message)s')
-logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
+# Minimal logging setup
+logging.basicConfig(level=logging.WARNING, format='%(levelname)s: %(message)s')
+logging.getLogger('uvicorn.access').setLevel(logging.ERROR)
+logging.getLogger('asyncio').setLevel(logging.ERROR)
 
 # Add modules to path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'modules'))
 sys.path.append(os.path.dirname(__file__))
 
-
-
 from modules.ml_predictor import MobileMLModel
 from modules.api_routes import setup_routes
+
+# Initialize database immediately
+print("🔄 Connecting to database...")
 try:
     from utils.database_manager import DatabaseManager
     db = DatabaseManager.get_instance()
+    print("✅ Database instance created")
 except Exception as e:
-    logging.error(f"❌ Database import failed: {e}")
+    print(f"❌ Database failed: {e}")
     db = None
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
-logging.getLogger('uvicorn.access').setLevel(logging.WARNING)  # Reduce uvicorn noise
+async def init_database():
+    global db
+    if db:
+        try:
+            await DatabaseManager.initialize()
+            print("✅ Database connected")
+        except Exception as e:
+            print(f"⚠️ Database connection failed: {e}")
 
+# Initialize ML model in background to avoid blocking
+model = None
 
+async def init_model():
+    global model
+    try:
+        model = MobileMLModel()
+        print("✅ ML Model loaded")
+    except Exception as e:
+        print(f"❌ ML Model failed: {e}")
+        # Create minimal fallback model
+        class FallbackModel:
+            async def predict(self, symbol):
+                return {
+                    'symbol': symbol, 'current_price': 100, 'predicted_price': 101,
+                    'forecast_direction': 'HOLD', 'confidence': 50, 'change_24h': 0
+                }
+        model = FallbackModel()
 
-# Initialize ML model with validation
+# Load model at startup to prevent None errors
+print("🔄 Loading ML Model...")
 try:
     model = MobileMLModel()
-
+    print("✅ ML Model loaded successfully")
 except Exception as e:
-    logging.error(f"❌ ML Model initialization failed: {e}")
-    raise
+    print(f"❌ ML Model failed: {e}")
+    print("🔄 Using fallback model")
+    class FallbackModel:
+        async def predict(self, symbol):
+            return {
+                'symbol': symbol, 'current_price': 50000, 'predicted_price': 50100,
+                'forecast_direction': 'HOLD', 'confidence': 50, 'change_24h': 0.2
+            }
+    model = FallbackModel()
 
 from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize database and background tasks on startup"""
-    # Database connection with connection pooling
-    if db:
-        try:
-            await DatabaseManager.initialize()
-            if db.pool:
-                pass
-            else:
-                logging.error("❌ Database pool not created")
-        except Exception as e:
-            logging.error(f"❌ Database connection failed: {e}")
-    
-    # Start background services with task manager
+    """INSTANT startup - streams start immediately"""
     import asyncio
-    background_tasks = []
     
-    try:
-        from async_task_manager import task_manager
-        use_task_manager = True
-
-    except ImportError:
-        use_task_manager = False
-        logging.warning("⚠️ Task manager not available, using direct async")
-    
-    # Initialize real-time services with shared model
+    # Initialize services INSTANTLY without waiting
     from realtime_websocket_service import RealTimeWebSocketService
     from stock_realtime_service import StockRealtimeService
     import realtime_websocket_service as rws_module
     import stock_realtime_service as stock_module
     import modules.api_routes as api_module
     
-    # Crypto real-time service with database
+    # Setup services with database connection
     realtime_service = RealTimeWebSocketService(model, db)
-    rws_module.realtime_service = realtime_service
-    
-    # Stock real-time service with database
     stock_service = StockRealtimeService(model, db)
-    stock_module.stock_realtime_service = stock_service
     
-    # Make both services available to API routes and globally
+    # Make services available IMMEDIATELY
+    rws_module.realtime_service = realtime_service
+    stock_module.stock_realtime_service = stock_service
     api_module.realtime_service = realtime_service
     api_module.stock_service = stock_service
     api_module.stock_realtime_service = stock_service
     
-    # Make services available globally
-    import stock_realtime_service as stock_module
-    stock_module.stock_realtime_service = stock_service
-    rws_module.stock_realtime_service = stock_service
+    # START STREAMS INSTANTLY - no await, pure background
+    background_tasks = [
+        asyncio.create_task(realtime_service.start_binance_streams()),
+        asyncio.create_task(stock_service.start_stock_streams())
+    ]
     
-    # Start crypto streams
-    if use_task_manager:
-        task1 = await task_manager.run_background_task(
-            "crypto_streams", 
-            realtime_service.start_binance_streams
-        )
-        background_tasks.append(task1)
-    else:
-        task1 = asyncio.create_task(realtime_service.start_binance_streams())
-        background_tasks.append(task1)
+    # Database connection in background (non-blocking)
+    async def setup_database():
+        try:
+            await init_database()
+            print("🔄 Starting gap filling...")
+            # Start gap filling after database is ready
+            from gap_filling_service import GapFillingService
+            gap_filler = GapFillingService(model)
+            await gap_filler.fill_missing_data(db)
+            print("✅ Gap filling completed")
+        except Exception as e:
+            print(f"⚠️ Database setup failed: {e}")
     
-    # Start stock streams
-    if use_task_manager:
-        task2 = await task_manager.run_background_task(
-            "stock_streams", 
-            stock_service.start_stock_streams
-        )
-        background_tasks.append(task2)
-    else:
-        task2 = asyncio.create_task(stock_service.start_stock_streams())
-        background_tasks.append(task2)
-
+    # Initialize database in background (model already loaded)
+    background_tasks.append(asyncio.create_task(setup_database()))
     
-    # Gap filling service (low priority, background)
-    if db and db.pool:
-        from gap_filling_service import GapFillingService
-        gap_filler = GapFillingService(model)  # Pass shared model
-        if use_task_manager:
-            task2 = await task_manager.run_background_task(
-                "gap_filling", 
-                gap_filler.fill_missing_data, 
-                db
-            )
-            background_tasks.append(task2)
-
-        else:
-            task2 = asyncio.create_task(gap_filler.fill_missing_data(db))
-            background_tasks.append(task2)
-
-    
-    # Store background tasks for cleanup
     app.state.background_tasks = background_tasks
-    if use_task_manager:
-        app.state.task_manager = task_manager
     
     yield
     
-    # Cleanup on shutdown
+    # Cleanup
     for task in background_tasks:
         if not task.done():
             task.cancel()
@@ -167,14 +150,17 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
-# Setup all API routes with database
-try:
-    setup_routes(app, model, db)
-
-except Exception as e:
-    logging.error(f"❌ API routes setup failed: {e}")
-    raise
+# Setup API routes with model and database
+setup_routes(app, model, db)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import asyncio
+    import sys
+    
+    # Fix Windows asyncio issues
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    
+    print("🚀 Starting Trading AI Server on http://localhost:8000")
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
