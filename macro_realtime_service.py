@@ -209,42 +209,71 @@ class MacroRealtimeService:
     
     async def add_connection(self, websocket, symbol, connection_id, timeframe='1D'):
         """Add macro indicator connection"""
-        if symbol not in self.active_connections:
-            self.active_connections[symbol] = {}
+        print(f"🏦 Macro service adding connection for {symbol} with ID {connection_id}")
         
-        self.active_connections[symbol][connection_id] = {
-            'websocket': websocket,
-            'timeframe': timeframe,
-            'connected_at': datetime.now(),
-            'user_id': connection_id.split('_')[-1]
-        }
-        
-        # Send historical data
-        await self._send_macro_historical_data(websocket, symbol, timeframe)
+        try:
+            if symbol not in self.active_connections:
+                self.active_connections[symbol] = {}
+                print(f"🆕 Created new macro symbol entry for {symbol}")
+            
+            self.active_connections[symbol][connection_id] = {
+                'websocket': websocket,
+                'timeframe': timeframe,
+                'connected_at': datetime.now()
+            }
+            print(f"✅ Macro connection stored for {symbol}")
+            
+            # Send historical data
+            print(f"📊 Sending macro historical data for {symbol}")
+            await self._send_macro_historical_data(websocket, symbol, timeframe)
+            print(f"✅ Macro historical data sent for {symbol}")
+            
+        except Exception as e:
+            print(f"❌ Error in macro add_connection for {symbol}: {e}")
+            raise
     
     async def _send_macro_historical_data(self, websocket, symbol, timeframe):
         """Send historical macro data"""
+        print(f"🏦 _send_macro_historical_data called for {symbol} {timeframe}")
         try:
             # Use database or generate synthetic data
             db = self.database
+            print(f"📊 Macro database available: {db is not None and hasattr(db, 'pool') and db.pool is not None}")
             if not db or not db.pool:
                 try:
                     from database import db as global_db
                     if global_db and global_db.pool:
                         db = global_db
+                        print(f"🔄 Using global database for macro")
                     else:
+                        print(f"❌ No database available for macro {symbol}")
+                        # Send minimal response instead of failing
+                        minimal_data = {
+                            "type": "historical_data",
+                            "symbol": symbol,
+                            "timeframe": timeframe,
+                            "message": "Macro historical data unavailable"
+                        }
+                        await websocket.send_text(json.dumps(minimal_data))
                         return
-                except Exception:
+                except Exception as e:
+                    print(f"❌ Macro database fallback failed: {e}")
                     return
             
             chart_data = await db.get_chart_data(symbol, timeframe)
             
             if chart_data['actual'] and chart_data['forecast']:
-                points = 50
+                # Ensure proper data alignment
+                min_length = min(len(chart_data['actual']), len(chart_data['forecast']), len(chart_data['timestamps']))
+                points = min(50, min_length)
+                
                 actual_data = [float(x) for x in chart_data['actual'][-points:]]
                 forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
                 timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
+                
+                print(f"📊 Macro historical data for {symbol}: {len(actual_data)} actual, {len(forecast_data)} forecast")
             else:
+                print(f"❌ No macro database data for {symbol}")
                 return  # Don't send data if no database data available
             
             # Get indicator name
@@ -271,8 +300,18 @@ class MacroRealtimeService:
             
             await websocket.send_text(json.dumps(historical_message))
             
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"❌ _send_macro_historical_data failed for {symbol}: {e}")
+            # Send error response instead of silent failure
+            try:
+                error_data = {
+                    "type": "error",
+                    "symbol": symbol,
+                    "message": f"Macro historical data error: {str(e)}"
+                }
+                await websocket.send_text(json.dumps(error_data))
+            except:
+                pass
     
     def remove_connection(self, symbol, connection_id):
         """Remove macro indicator connection"""

@@ -528,22 +528,36 @@ class RealTimeWebSocketService:
             chart_data = await db.get_chart_data(query_symbol, normalized_tf)
             
             if chart_data['actual'] and chart_data['forecast']:
-                # Use database data
-                points = 50
+                # Use database data with proper alignment
+                points = min(50, len(chart_data['actual']), len(chart_data['forecast']))
                 actual_data = [float(x) for x in chart_data['actual'][-points:]]
                 forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
                 timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
+                
+                # Ensure arrays are same length
+                min_length = min(len(actual_data), len(forecast_data), len(timestamps))
+                actual_data = actual_data[-min_length:]
+                forecast_data = forecast_data[-min_length:]
+                timestamps = timestamps[-min_length:]
+                
+                print(f"📊 Historical data for {symbol}: {len(actual_data)} actual, {len(forecast_data)} forecast, {len(timestamps)} timestamps")
             else:
                 # Force database query with timeframe-specific symbol
                 timeframe_symbol = f"{symbol}_{timeframe}" if timeframe in ['1m', '5m', '15m', '1h', '4h', '1D', '1W'] else symbol
                 chart_data = await db.get_chart_data(timeframe_symbol, timeframe)
                 
                 if chart_data['actual'] and chart_data['forecast']:
-                    points = 50
+                    # Ensure proper data alignment
+                    min_length = min(len(chart_data['actual']), len(chart_data['forecast']), len(chart_data['timestamps']))
+                    points = min(50, min_length)
+                    
                     actual_data = [float(x) for x in chart_data['actual'][-points:]]
                     forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
                     timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
+                    
+                    print(f"📊 Fallback data for {symbol}: {len(actual_data)} actual, {len(forecast_data)} forecast")
                 else:
+                    print(f"❌ No database data for {symbol}_{timeframe}")
                     return  # Don't send synthetic data
             
             historical_message = {

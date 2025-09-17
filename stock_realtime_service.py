@@ -472,39 +472,45 @@ class StockRealtimeService:
     
     async def add_connection(self, websocket, symbol, connection_id, timeframe='1D'):
         """Add connection with pooling optimization"""
-        if symbol not in self.active_connections:
-            self.active_connections[symbol] = {}
+        print(f"📈 Stock service adding connection for {symbol} with ID {connection_id}")
         
-        # Check for existing similar connection for data reuse
-        existing_data = None
-        for conn_data in self.active_connections[symbol].values():
-            if conn_data['timeframe'] == timeframe and hasattr(conn_data, 'cached_data'):
-                existing_data = conn_data['cached_data']
-                break
-        
-        self.active_connections[symbol][connection_id] = {
-            'websocket': websocket,
-            'timeframe': timeframe,
-            'connected_at': datetime.now(),
-            'user_id': connection_id.split('_')[-1]
-        }
-        
-        # Send historical data (reuse if available)
-        if existing_data:
-            await websocket.send_text(existing_data)
-        else:
+        try:
+            if symbol not in self.active_connections:
+                self.active_connections[symbol] = {}
+                print(f"🆕 Created new stock symbol entry for {symbol}")
+            
+            self.active_connections[symbol][connection_id] = {
+                'websocket': websocket,
+                'timeframe': timeframe,
+                'connected_at': datetime.now()
+            }
+            print(f"✅ Stock connection stored for {symbol}")
+            
+            # Send historical data
+            print(f"📊 Sending stock historical data for {symbol}")
             await self._send_stock_historical_data(websocket, symbol, timeframe)
+            print(f"✅ Stock historical data sent for {symbol}")
+            
+        except Exception as e:
+            print(f"❌ Error in stock add_connection for {symbol}: {e}")
+            raise
     
     async def _send_stock_historical_data(self, websocket, symbol, timeframe):
         """Send historical stock data with caching"""
+        print(f"📊 _send_stock_historical_data called for {symbol} {timeframe}")
         try:
             # Check cache first
             cache_key = f"stock_history:{symbol}:{timeframe}"
             if hasattr(self, 'data_cache') and cache_key in self.data_cache:
                 cached_item = self.data_cache[cache_key]
                 if (datetime.now() - cached_item['timestamp']).total_seconds() < 300:
+                    print(f"💾 Using cached stock data for {symbol}")
                     await websocket.send_text(cached_item['data'])
                     return
+                else:
+                    print(f"⏰ Stock cache expired for {symbol}")
+            else:
+                print(f"🚫 No stock cache for {symbol}")
             
             # Use database from constructor or fallback to global
             db = self.database
@@ -521,11 +527,17 @@ class StockRealtimeService:
             chart_data = await db.get_chart_data(symbol, timeframe)
             
             if chart_data['actual'] and chart_data['forecast']:
-                points = 50
+                # Ensure proper data alignment
+                min_length = min(len(chart_data['actual']), len(chart_data['forecast']), len(chart_data['timestamps']))
+                points = min(50, min_length)
+                
                 actual_data = [float(x) for x in chart_data['actual'][-points:]]
                 forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
                 timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
+                
+                print(f"📊 Stock historical data for {symbol}: {len(actual_data)} actual, {len(forecast_data)} forecast")
             else:
+                print(f"❌ No stock database data for {symbol}")
                 return  # Don't send data if no database data available
             
             historical_message = {
@@ -548,8 +560,18 @@ class StockRealtimeService:
             
             await websocket.send_text(message_json)
             
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"❌ _send_stock_historical_data failed for {symbol}: {e}")
+            # Send error response instead of silent failure
+            try:
+                error_data = {
+                    "type": "error",
+                    "symbol": symbol,
+                    "message": f"Stock historical data error: {str(e)}"
+                }
+                await websocket.send_text(json.dumps(error_data))
+            except:
+                pass
     
     async def _generate_fresh_stock_prediction(self, symbol):
         """Generate fresh stock prediction in background"""

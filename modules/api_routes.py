@@ -658,26 +658,53 @@ def setup_routes(app: FastAPI, model, database=None):
             
             print(f"🚀 Starting WebSocket loop for {symbol}")
             
-            # Simple keep-alive loop without complex message handling
+            # Real-time update loop
             ping_count = 0
             while True:
                 try:
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(2)  # Update every 2 seconds
                     ping_count += 1
                     
-                    # Send ping to keep connection alive
-                    ping_data = {
-                        "type": "ping", 
-                        "symbol": symbol,
-                        "timeframe": timeframe,
-                        "ping_count": ping_count,
-                        "timestamp": datetime.now().isoformat()
-                    }
-                    await websocket.send_text(json.dumps(ping_data))
-                    print(f"📡 Sent ping #{ping_count} to {symbol}")
+                    # Get current price from cache
+                    current_price = None
+                    if is_crypto and realtime_service and symbol in realtime_service.price_cache:
+                        price_data = realtime_service.price_cache[symbol]
+                        current_price = price_data['current_price']
+                    elif is_stock and stock_realtime_service and symbol in stock_realtime_service.price_cache:
+                        price_data = stock_realtime_service.price_cache[symbol]
+                        current_price = price_data['current_price']
+                    elif is_macro and macro_realtime_service and symbol in macro_realtime_service.price_cache:
+                        price_data = macro_realtime_service.price_cache[symbol]
+                        current_price = price_data['current_price']
+                    
+                    # Send real-time update
+                    if current_price:
+                        realtime_data = {
+                            "type": "realtime_update",
+                            "symbol": symbol,
+                            "timeframe": timeframe,
+                            "current_price": current_price,
+                            "change_24h": price_data.get('change_24h', 0),
+                            "volume": price_data.get('volume', 0),
+                            "timestamp": datetime.now().isoformat(),
+                            "ping_count": ping_count
+                        }
+                        await websocket.send_text(json.dumps(realtime_data))
+                        print(f"📡 Sent update #{ping_count} to {symbol}: ${current_price:.2f}")
+                    else:
+                        # Send ping if no price data
+                        ping_data = {
+                            "type": "ping", 
+                            "symbol": symbol,
+                            "timeframe": timeframe,
+                            "ping_count": ping_count,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        await websocket.send_text(json.dumps(ping_data))
+                        print(f"📡 Sent ping #{ping_count} to {symbol} (no price data)")
                     
                 except Exception as e:
-                    print(f"❌ Ping failed for {symbol}: {e}")
+                    print(f"❌ Update failed for {symbol}: {e}")
                     break
                         
                 except asyncio.CancelledError:
