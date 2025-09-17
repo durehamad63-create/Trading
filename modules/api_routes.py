@@ -218,18 +218,18 @@ def setup_routes(app: FastAPI, model, database=None):
                 for symbol in symbols:
                     if symbol in realtime_service.price_cache and symbol in crypto_symbols:
                         price_data = realtime_service.price_cache[symbol]
-                            assets.append({
-                                'symbol': symbol,
-                                'name': multi_asset.get_asset_name(symbol),
-                                'current_price': price_data['current_price'],
-                                'change_24h': price_data['change_24h'],
-                                'volume': price_data['volume'],
-                                'forecast_direction': 'UP' if price_data['change_24h'] > 1 else 'DOWN' if price_data['change_24h'] < -1 else 'HOLD',
-                                'confidence': min(80, max(60, 70 + abs(price_data['change_24h']))),
-                                'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
-                                'data_source': 'Binance Stream',
-                                'asset_class': 'crypto'
-                            })
+                        assets.append({
+                            'symbol': symbol,
+                            'name': multi_asset.get_asset_name(symbol),
+                            'current_price': price_data['current_price'],
+                            'change_24h': price_data['change_24h'],
+                            'volume': price_data['volume'],
+                            'forecast_direction': 'UP' if price_data['change_24h'] > 1 else 'DOWN' if price_data['change_24h'] < -1 else 'HOLD',
+                            'confidence': min(80, max(60, 70 + abs(price_data['change_24h']))),
+                            'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
+                            'data_source': 'Binance Stream',
+                            'asset_class': 'crypto'
+                        })
             print(f"🔍 CRYPTO RESULT - Found {len(assets)} assets")
         
         elif class_filter == "stocks":
