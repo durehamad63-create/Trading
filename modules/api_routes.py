@@ -217,25 +217,27 @@ def setup_routes(app: FastAPI, model, database=None):
                 for symbol in symbols:
                     if symbol in realtime_service.price_cache:
                         price_data = realtime_service.price_cache[symbol]
-                        print(f"✅ Adding crypto: {symbol} = ${price_data['current_price']:.2f}")
-                        assets.append({
-                            'symbol': symbol,
-                            'name': multi_asset.get_asset_name(symbol),
-                            'current_price': price_data['current_price'],
-                            'change_24h': price_data['change_24h'],
-                            'volume': price_data['volume'],
-                            'forecast_direction': 'UP' if price_data['change_24h'] > 1 else 'DOWN' if price_data['change_24h'] < -1 else 'HOLD',
-                            'confidence': min(80, max(60, 70 + abs(price_data['change_24h']))),
-                            'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
-                            'data_source': 'Binance Stream',
-                            'asset_class': 'crypto'
-                        })
+                        # Only add if it's actually a crypto symbol and has real data
+                        if symbol in crypto_symbols:
+                            print(f"✅ Adding crypto: {symbol} = ${price_data['current_price']:.2f}")
+                            assets.append({
+                                'symbol': symbol,
+                                'name': multi_asset.get_asset_name(symbol),
+                                'current_price': price_data['current_price'],
+                                'change_24h': price_data['change_24h'],
+                                'volume': price_data['volume'],
+                                'forecast_direction': 'UP' if price_data['change_24h'] > 1 else 'DOWN' if price_data['change_24h'] < -1 else 'HOLD',
+                                'confidence': min(80, max(60, 70 + abs(price_data['change_24h']))),
+                                'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
+                                'data_source': 'Binance Stream',
+                                'asset_class': 'crypto'
+                            })
         
         elif class_filter == "stocks":
             if stock_realtime_service and hasattr(stock_realtime_service, 'price_cache'):
                 print(f"💹 Stock cache has {len(stock_realtime_service.price_cache)} symbols: {list(stock_realtime_service.price_cache.keys())}")
                 for symbol in symbols:
-                    if symbol in stock_realtime_service.price_cache:
+                    if symbol in stock_realtime_service.price_cache and symbol in stock_symbols:
                         price_data = stock_realtime_service.price_cache[symbol]
                         print(f"✅ Adding stock: {symbol} = ${price_data['current_price']:.2f}")
                         assets.append({
@@ -251,15 +253,14 @@ def setup_routes(app: FastAPI, model, database=None):
                             'asset_class': 'stocks'
                         })
             
-            # If no stock data available, return empty (don't fallback to crypto)
             if not assets:
-                print("⚠️ No stock data available in cache")
+                print("⚠️ No stock data available - stock service may not be running")
         
         elif class_filter == "macro":
             if macro_realtime_service and hasattr(macro_realtime_service, 'price_cache'):
                 print(f"💰 Macro cache has {len(macro_realtime_service.price_cache)} indicators: {list(macro_realtime_service.price_cache.keys())}")
                 for symbol in symbols:
-                    if symbol in macro_realtime_service.price_cache:
+                    if symbol in macro_realtime_service.price_cache and symbol in macro_symbols:
                         price_data = macro_realtime_service.price_cache[symbol]
                         unit = price_data.get('unit', '')
                         if unit == 'B':
@@ -282,8 +283,11 @@ def setup_routes(app: FastAPI, model, database=None):
                             'data_source': 'Economic Simulation',
                             'asset_class': 'macro'
                         })
+            
+            if not assets:
+                print("⚠️ No macro data available - macro service may not be running")
         
-        else:  # "all" case
+        else:  # "all" case - only return real data, no fallbacks
             # Add crypto assets (exclude stablecoins for mixed view)
             if realtime_service and hasattr(realtime_service, 'price_cache'):
                 crypto_for_all = [s for s in crypto_symbols[:min(limit//2, 5)] if s not in ['USDT', 'USDC']]
@@ -303,7 +307,7 @@ def setup_routes(app: FastAPI, model, database=None):
                             'asset_class': 'crypto'
                         })
             
-            # Add stock assets
+            # Add stock assets - only if they exist in stock cache
             if stock_realtime_service and hasattr(stock_realtime_service, 'price_cache'):
                 for symbol in stock_symbols[:min(limit//2, 5)]:
                     if symbol in stock_realtime_service.price_cache:
@@ -320,6 +324,10 @@ def setup_routes(app: FastAPI, model, database=None):
                             'data_source': price_data.get('data_source', 'Stock API'),
                             'asset_class': 'stocks'
                         })
+            
+            # If no real data available, return empty
+            if not assets:
+                print("⚠️ No real data available from any service")
         
         return {"assets": assets}
 
@@ -1185,12 +1193,13 @@ def setup_routes(app: FastAPI, model, database=None):
             crypto_cache_count = len(realtime_service.price_cache) if realtime_service and hasattr(realtime_service, 'price_cache') else 0
             stock_cache_count = len(stock_realtime_service.price_cache) if stock_realtime_service and hasattr(stock_realtime_service, 'price_cache') else 0
             
-            # Get crypto data - only from crypto symbols
+            # Get crypto data - only real crypto data (exclude stablecoins for WebSocket)
             if realtime_service and hasattr(realtime_service, 'price_cache'):
                 crypto_count = 0
                 print(f"📊 Crypto cache has {len(realtime_service.price_cache)} symbols: {list(realtime_service.price_cache.keys())}")
-                for symbol in realtime_service.price_cache.keys():
-                    if symbol in crypto_symbols:  # Only include if in crypto list
+                # Only include non-stablecoin cryptos that have real data
+                for symbol in ['BTC', 'ETH', 'BNB', 'XRP', 'SOL', 'DOGE', 'ADA', 'TRX']:
+                    if symbol in realtime_service.price_cache:
                         price_data = realtime_service.price_cache[symbol]
                         change = price_data['change_24h']
                         crypto_count += 1
@@ -1210,12 +1219,13 @@ def setup_routes(app: FastAPI, model, database=None):
                         })
 
             
-            # Get stock data - only from stock symbols
+            # Get stock data - only real stock data
             if stock_realtime_service and hasattr(stock_realtime_service, 'price_cache'):
                 stock_count = 0
                 print(f"💹 Stock cache has {len(stock_realtime_service.price_cache)} symbols: {list(stock_realtime_service.price_cache.keys())}")
-                for symbol in stock_realtime_service.price_cache.keys():
-                    if symbol in stock_symbols:  # Only include if in stock list
+                # Only include actual stock symbols that have real data
+                for symbol in ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM']:
+                    if symbol in stock_realtime_service.price_cache:
                         price_data = stock_realtime_service.price_cache[symbol]
                         change = price_data['change_24h']
                         stock_count += 1
