@@ -424,41 +424,48 @@ class RealTimeWebSocketService:
     
     async def add_connection(self, websocket, symbol, connection_id, timeframe='1D'):
         """Add connection with efficient pooling"""
-        if symbol not in self.active_connections:
-            self.active_connections[symbol] = {}
+        print(f"🔗 Adding connection for {symbol} with ID {connection_id}")
         
-        # Check for existing connection with same timeframe (connection reuse)
-        existing_conn = None
-        for conn_id, conn_data in self.active_connections[symbol].items():
-            if conn_data['timeframe'] == timeframe and conn_id != connection_id:
-                existing_conn = conn_data
-                break
-        
-        self.active_connections[symbol][connection_id] = {
-            'websocket': websocket,
-            'timeframe': timeframe,
-            'connected_at': datetime.now(),
-            'user_id': connection_id.split('_')[-1]  # Extract user ID for pooling
-        }
-        
-        # Send historical data (cached if available from existing connection)
-        if existing_conn and hasattr(existing_conn, 'cached_historical'):
-            await websocket.send_text(existing_conn['cached_historical'])
-        else:
+        try:
+            if symbol not in self.active_connections:
+                self.active_connections[symbol] = {}
+                print(f"🆕 Created new symbol entry for {symbol}")
+            
+            self.active_connections[symbol][connection_id] = {
+                'websocket': websocket,
+                'timeframe': timeframe,
+                'connected_at': datetime.now()
+            }
+            print(f"✅ Connection stored for {symbol}")
+            
+            # Send historical data
+            print(f"📈 Sending historical data for {symbol}")
             await self._send_historical_data(websocket, symbol, timeframe)
+            print(f"✅ Historical data sent for {symbol}")
+            
+        except Exception as e:
+            print(f"❌ Error in add_connection for {symbol}: {e}")
+            raise
     
     async def _send_historical_data(self, websocket, symbol, timeframe):
         """Send cached historical data with improved caching"""
+        print(f"📈 _send_historical_data called for {symbol} {timeframe}")
         try:
             # Multi-level cache: Redis -> Memory -> Database
             cache_key = CacheKeys.websocket_history(symbol, timeframe)
+            print(f"🔑 Cache key: {cache_key}")
             
             # Check memory cache first (fastest)
             if hasattr(self, 'memory_cache') and cache_key in self.memory_cache:
                 cached_data = self.memory_cache[cache_key]
                 if (datetime.now() - cached_data['timestamp']).total_seconds() < 300:  # 5 min TTL
+                    print(f"💾 Using memory cache for {symbol}")
                     await websocket.send_text(cached_data['message'])
                     return
+                else:
+                    print(f"⏰ Memory cache expired for {symbol}")
+            else:
+                print(f"🚫 No memory cache for {symbol}")
             
             # Try Redis cache
             try:
@@ -493,14 +500,26 @@ class RealTimeWebSocketService:
             
             # Use database from constructor or fallback to global
             db = self.database
+            print(f"📊 Database available: {db is not None and hasattr(db, 'pool') and db.pool is not None}")
             if not db or not db.pool:
                 try:
                     from database import db as global_db
                     if global_db and global_db.pool:
                         db = global_db
+                        print(f"🔄 Using global database")
                     else:
+                        print(f"❌ No database available for {symbol}")
+                        # Send minimal response instead of failing
+                        minimal_data = {
+                            "type": "historical_data",
+                            "symbol": symbol,
+                            "timeframe": timeframe,
+                            "message": "Historical data unavailable"
+                        }
+                        await websocket.send_text(json.dumps(minimal_data))
                         return
-                except Exception:
+                except Exception as e:
+                    print(f"❌ Database fallback failed: {e}")
                     return
             
             # Get historical chart data from database with normalized timeframe
@@ -558,9 +577,18 @@ class RealTimeWebSocketService:
             
             await websocket.send_text(message_json)
             
-        except Exception:
-            # Don't send anything if database fails
-            return
+        except Exception as e:
+            print(f"❌ _send_historical_data failed for {symbol}: {e}")
+            # Send error response instead of silent failure
+            try:
+                error_data = {
+                    "type": "error",
+                    "symbol": symbol,
+                    "message": f"Historical data error: {str(e)}"
+                }
+                await websocket.send_text(json.dumps(error_data))
+            except:
+                pass
     
     async def _store_all_timeframes(self, symbol, price, volume, change_24h):
         """Store price data for all timeframes regardless of connections"""

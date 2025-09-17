@@ -583,7 +583,14 @@ def setup_routes(app: FastAPI, model, database=None):
     @app.websocket("/ws/asset/{symbol}/forecast")
     async def asset_forecast_websocket(websocket: WebSocket, symbol: str):
         """Real-time forecast WebSocket with improved connection management"""
-        await websocket.accept()
+        print(f"🔌 WebSocket connection attempt for {symbol}")
+        
+        try:
+            await websocket.accept()
+            print(f"✅ WebSocket accepted for {symbol}")
+        except Exception as e:
+            print(f"❌ WebSocket accept failed for {symbol}: {e}")
+            return
         
         # Determine if symbol is crypto, stock, or macro
         crypto_symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX']
@@ -594,7 +601,10 @@ def setup_routes(app: FastAPI, model, database=None):
         is_stock = symbol in stock_symbols
         is_macro = symbol in macro_symbols
         
+        print(f"🔍 Symbol classification for {symbol}: crypto={is_crypto}, stock={is_stock}, macro={is_macro}")
+        
         if not (is_crypto or is_stock or is_macro):
+            print(f"❌ Unsupported symbol: {symbol}")
             await websocket.close(code=1000, reason=f"Unsupported symbol: {symbol}")
             return
         
@@ -602,148 +612,79 @@ def setup_routes(app: FastAPI, model, database=None):
         if is_crypto:
             timeframe = "4h"
             service = realtime_service
+            print(f"🔄 Using crypto service for {symbol}, service available: {service is not None}")
         elif is_stock:
             timeframe = "1D"
             service = stock_realtime_service
+            print(f"🔄 Using stock service for {symbol}, service available: {service is not None}")
         else:  # is_macro
             timeframe = "1D"
             service = macro_realtime_service
+            print(f"🔄 Using macro service for {symbol}, service available: {service is not None}")
         
         if not service:
+            print(f"❌ Service unavailable for {symbol}")
             await websocket.close(code=1000, reason="Service unavailable")
             return
         
         # Use connection manager for better connection handling
-        connection_id = await manager.get_or_create_connection(websocket, symbol, timeframe)
+        try:
+            connection_id = await manager.get_or_create_connection(websocket, symbol, timeframe)
+            print(f"✅ Connection manager created ID: {connection_id}")
+        except Exception as e:
+            print(f"❌ Connection manager failed for {symbol}: {e}")
+            await websocket.close(code=1000, reason="Connection manager failed")
+            return
         
         try:
             # Add to service with connection pooling
             await service.add_connection(websocket, symbol, connection_id, timeframe)
+            print(f"✅ Added to service for {symbol}")
+        except Exception as e:
+            print(f"❌ Service add_connection failed for {symbol}: {e}")
+            try:
+                await websocket.close(code=1000, reason="Service connection failed")
+            except:
+                pass
+            return
             
-            # Listen for timeframe and asset changes
-            async def handle_messages():
-                nonlocal timeframe, connection_id, symbol, service, is_crypto
-                try:
-                    async for message in websocket.iter_text():
-                        try:
-                            data = json.loads(message)
-                            
-                            # Handle timeframe changes
-                            if data.get('type') == 'set_timeframe':
-                                new_timeframe = data.get('timeframe', timeframe)
-                                if new_timeframe != timeframe:
-                                    # Update timeframe in place
-                                    if symbol in service.active_connections and connection_id in service.active_connections[symbol]:
-                                        service.active_connections[symbol][connection_id]['timeframe'] = new_timeframe
-                                        timeframe = new_timeframe
-                                        
-                                        # Send fresh historical data immediately
-                                        if is_crypto:
-                                            await realtime_service._send_historical_data(websocket, symbol, new_timeframe)
-                                        elif is_stock:
-                                            await stock_realtime_service._send_stock_historical_data(websocket, symbol, new_timeframe)
-                                        else:  # is_macro
-                                            await macro_realtime_service._send_macro_historical_data(websocket, symbol, new_timeframe)
-                                        
-                                        await websocket.send_text(json.dumps({
-                                            'type': 'timeframe_changed',
-                                            'symbol': symbol,
-                                            'timeframe': timeframe,
-                                            'timestamp': datetime.now().isoformat()
-                                        }))
-                            
-                            # Handle asset switches
-                            elif data.get('type') == 'set_symbol':
-                                new_symbol = data.get('symbol', symbol)
-                                if new_symbol != symbol:
-                                    # Remove old connection
-                                    service.remove_connection(symbol, connection_id)
-                                    
-                                    # Update symbol and determine new service
-                                    symbol = new_symbol
-                                    is_crypto = symbol in crypto_symbols
-                                    is_stock = symbol in stock_symbols
-                                    is_macro = symbol in macro_symbols
-                                    
-                                    if is_crypto:
-                                        service = realtime_service
-                                    elif is_stock:
-                                        service = stock_realtime_service
-                                    else:  # is_macro
-                                        service = macro_realtime_service
-                                    
-                                    if service:
-                                        # Create new connection for new symbol
-                                        connection_id = f"{symbol}_{timeframe}_{id(websocket)}"
-                                        await service.add_connection(websocket, symbol, connection_id, timeframe)
-                                        
-                                        # Send historical data for new symbol
-                                        if is_crypto:
-                                            await realtime_service._send_historical_data(websocket, symbol, timeframe)
-                                        elif is_stock:
-                                            await stock_realtime_service._send_stock_historical_data(websocket, symbol, timeframe)
-                                        else:  # is_macro
-                                            await macro_realtime_service._send_macro_historical_data(websocket, symbol, timeframe)
-                                        
-                                        await websocket.send_text(json.dumps({
-                                            'type': 'symbol_changed',
-                                            'symbol': symbol,
-                                            'timeframe': timeframe,
-                                            'timestamp': datetime.now().isoformat()
-                                        }))
-                                        
-                        except json.JSONDecodeError:
-                            pass
-                        except Exception:
-                            pass
-                            
-                except Exception:
-                    pass
+            print(f"🚀 Starting WebSocket loop for {symbol}")
             
-            # Start message handler
-            message_task = asyncio.create_task(handle_messages())
-            
-            # Enhanced keep-alive with reconnection logic
-            ping_failures = 0
-            max_failures = 3
-            
+            # Simple keep-alive loop without complex message handling
+            ping_count = 0
             while True:
                 try:
                     await asyncio.sleep(5)
+                    ping_count += 1
                     
-                    # Check connection health
-                    if hasattr(websocket, 'client_state') and websocket.client_state.name == 'CONNECTED':
-                        try:
-                            ping_data = {
-                                "type": "ping", 
-                                "symbol": symbol,
-                                "timeframe": timeframe,
-                                "asset_type": "crypto" if is_crypto else "stock" if is_stock else "macro",
-                                "timestamp": datetime.now().isoformat()
-                            }
-                            await websocket.send_text(json.dumps(ping_data))
-                            ping_failures = 0  # Reset on success
-                            
-                            # Update connection state
-                            await manager.update_connection_state(symbol, connection_id, last_ping=datetime.now())
-                            
-                        except Exception:
-                            ping_failures += 1
-                            if ping_failures >= max_failures:
-                                break
-                    else:
-                        break
+                    # Send ping to keep connection alive
+                    ping_data = {
+                        "type": "ping", 
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                        "ping_count": ping_count,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    await websocket.send_text(json.dumps(ping_data))
+                    print(f"📡 Sent ping #{ping_count} to {symbol}")
+                    
+                except Exception as e:
+                    print(f"❌ Ping failed for {symbol}: {e}")
+                    break
                         
                 except asyncio.CancelledError:
+                    print(f"🔄 WebSocket task cancelled for {symbol}")
                     break
-                except Exception:
+                except Exception as e:
+                    print(f"❌ WebSocket loop error for {symbol}: {e}")
                     break
                 
-        except WebSocketDisconnect:
-            pass
-        except Exception:
-            pass
+        except WebSocketDisconnect as e:
+            print(f"🔌 WebSocket disconnected for {symbol}: {e}")
+        except Exception as e:
+            print(f"❌ WebSocket error for {symbol}: {e}")
         finally:
+            print(f"🧹 Cleaning up WebSocket for {symbol}")
             # Graceful cleanup with connection manager
             try:
                 # Cancel message handler
@@ -753,12 +694,14 @@ def setup_routes(app: FastAPI, model, database=None):
                 # Remove from service
                 if service and connection_id:
                     service.remove_connection(symbol, connection_id)
+                    print(f"✅ Removed from service for {symbol}")
                 
                 # Safe disconnect through manager
                 await manager.safe_disconnect(websocket, symbol, connection_id)
+                print(f"✅ Manager cleanup complete for {symbol}")
                 
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"❌ Cleanup error for {symbol}: {e}")
     
     @app.websocket("/ws/asset/{symbol}/trends")
     async def asset_trends_websocket(websocket: WebSocket, symbol: str):
