@@ -578,14 +578,19 @@ def setup_routes(app: FastAPI, model, database=None):
     @app.websocket("/ws/asset/{symbol}/forecast")
     async def asset_forecast_websocket(websocket: WebSocket, symbol: str):
         """Real-time forecast WebSocket with improved connection management"""
-        print(f"🔌 WebSocket connection attempt for {symbol}")
-        print(f"🔍 Services status: realtime={realtime_service is not None}, stock={stock_realtime_service is not None}, macro={macro_realtime_service is not None}")
+        import sys
+        print(f"🔌 WebSocket connection attempt for {symbol}", flush=True)
+        sys.stdout.flush()
+        print(f"🔍 Services status: realtime={realtime_service is not None}, stock={stock_realtime_service is not None}, macro={macro_realtime_service is not None}", flush=True)
+        sys.stdout.flush()
         
         try:
             await websocket.accept()
-            print(f"✅ WebSocket accepted for {symbol}")
+            print(f"✅ WebSocket accepted for {symbol}", flush=True)
+            sys.stdout.flush()
         except Exception as e:
-            print(f"❌ WebSocket accept failed for {symbol}: {e}")
+            print(f"❌ WebSocket accept failed for {symbol}: {e}", flush=True)
+            sys.stdout.flush()
             return
         
         # Determine if symbol is crypto, stock, or macro
@@ -597,10 +602,12 @@ def setup_routes(app: FastAPI, model, database=None):
         is_stock = symbol in stock_symbols
         is_macro = symbol in macro_symbols
         
-        print(f"🔍 Symbol classification for {symbol}: crypto={is_crypto}, stock={is_stock}, macro={is_macro}")
+        print(f"🔍 Symbol classification for {symbol}: crypto={is_crypto}, stock={is_stock}, macro={is_macro}", flush=True)
+        sys.stdout.flush()
         
         if not (is_crypto or is_stock or is_macro):
-            print(f"❌ Unsupported symbol: {symbol}")
+            print(f"❌ Unsupported symbol: {symbol}", flush=True)
+            sys.stdout.flush()
             await websocket.close(code=1000, reason=f"Unsupported symbol: {symbol}")
             return
         
@@ -608,29 +615,36 @@ def setup_routes(app: FastAPI, model, database=None):
         if is_crypto:
             timeframe = "4h"
             service = realtime_service
-            print(f"🔄 Using crypto service for {symbol}, service available: {service is not None}")
+            print(f"🔄 Using crypto service for {symbol}, service available: {service is not None}", flush=True)
+            sys.stdout.flush()
         elif is_stock:
             timeframe = "1D"
             service = stock_realtime_service
-            print(f"🔄 Using stock service for {symbol}, service available: {service is not None}")
+            print(f"🔄 Using stock service for {symbol}, service available: {service is not None}", flush=True)
+            sys.stdout.flush()
         else:  # is_macro
             timeframe = "1D"
             service = macro_realtime_service
-            print(f"🔄 Using macro service for {symbol}, service available: {service is not None}")
+            print(f"🔄 Using macro service for {symbol}, service available: {service is not None}", flush=True)
+            sys.stdout.flush()
         
         if not service:
-            print(f"❌ Service unavailable for {symbol}")
+            print(f"❌ Service unavailable for {symbol}", flush=True)
+            sys.stdout.flush()
             try:
                 await websocket.close(code=1000, reason="Service unavailable")
             except Exception as e:
-                print(f"❌ Error closing websocket: {e}")
+                print(f"❌ Error closing websocket: {e}", flush=True)
+                sys.stdout.flush()
             return
         
         # Use connection manager for better connection handling
         try:
-            print(f"🔧 Creating connection manager entry for {symbol}")
+            print(f"🔧 Creating connection manager entry for {symbol}", flush=True)
+            sys.stdout.flush()
             connection_id = await manager.get_or_create_connection(websocket, symbol, timeframe)
-            print(f"✅ Connection manager created ID: {connection_id}")
+            print(f"✅ Connection manager created ID: {connection_id}", flush=True)
+            sys.stdout.flush()
         except Exception as e:
             print(f"❌ Connection manager failed for {symbol}: {e}")
             import traceback
@@ -642,10 +656,12 @@ def setup_routes(app: FastAPI, model, database=None):
             return
         
         try:
-            print(f"🔗 Adding connection to service for {symbol}")
+            print(f"🔗 Adding connection to service for {symbol}", flush=True)
+            sys.stdout.flush()
             # Add to service with connection pooling
             await service.add_connection(websocket, symbol, connection_id, timeframe)
-            print(f"✅ Added to service for {symbol}")
+            print(f"✅ Added to service for {symbol}", flush=True)
+            sys.stdout.flush()
         except Exception as e:
             print(f"❌ Service add_connection failed for {symbol}: {e}")
             import traceback
@@ -656,7 +672,8 @@ def setup_routes(app: FastAPI, model, database=None):
                 pass
             return
             
-            print(f"🚀 Starting WebSocket loop for {symbol}")
+            print(f"🚀 Starting WebSocket loop for {symbol}", flush=True)
+            sys.stdout.flush()
             
             # Real-time update loop
             ping_count = 0
@@ -690,7 +707,8 @@ def setup_routes(app: FastAPI, model, database=None):
                             "ping_count": ping_count
                         }
                         await websocket.send_text(json.dumps(realtime_data))
-                        print(f"📡 Sent update #{ping_count} to {symbol}: ${current_price:.2f}")
+                        print(f"📡 Sent update #{ping_count} to {symbol}: ${current_price:.2f}", flush=True)
+                        sys.stdout.flush()
                     else:
                         # Send ping if no price data
                         ping_data = {
@@ -701,10 +719,12 @@ def setup_routes(app: FastAPI, model, database=None):
                             "timestamp": datetime.now().isoformat()
                         }
                         await websocket.send_text(json.dumps(ping_data))
-                        print(f"📡 Sent ping #{ping_count} to {symbol} (no price data)")
+                        print(f"📡 Sent ping #{ping_count} to {symbol} (no price data)", flush=True)
+                        sys.stdout.flush()
                     
                 except Exception as e:
-                    print(f"❌ Update failed for {symbol}: {e}")
+                    print(f"❌ Update failed for {symbol}: {e}", flush=True)
+                    sys.stdout.flush()
                     break
                         
                 except asyncio.CancelledError:
@@ -717,9 +737,11 @@ def setup_routes(app: FastAPI, model, database=None):
         except WebSocketDisconnect as e:
             print(f"🔌 WebSocket disconnected for {symbol}: {e}")
         except Exception as e:
-            print(f"❌ WebSocket error for {symbol}: {e}")
+            print(f"❌ WebSocket error for {symbol}: {e}", flush=True)
+            sys.stdout.flush()
         finally:
-            print(f"🧹 Cleaning up WebSocket for {symbol}")
+            print(f"🧹 Cleaning up WebSocket for {symbol}", flush=True)
+            sys.stdout.flush()
             # Graceful cleanup with connection manager
             try:
                 # Cancel message handler

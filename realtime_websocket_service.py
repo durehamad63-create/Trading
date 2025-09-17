@@ -424,7 +424,7 @@ class RealTimeWebSocketService:
     
     async def add_connection(self, websocket, symbol, connection_id, timeframe='1D'):
         """Add connection with efficient pooling"""
-        print(f"🔗 Adding connection for {symbol} with ID {connection_id}")
+        print(f"🔗 Adding connection for {symbol} with ID {connection_id}", flush=True)
         
         try:
             if symbol not in self.active_connections:
@@ -436,36 +436,36 @@ class RealTimeWebSocketService:
                 'timeframe': timeframe,
                 'connected_at': datetime.now()
             }
-            print(f"✅ Connection stored for {symbol}")
+            print(f"✅ Connection stored for {symbol}", flush=True)
             
             # Send historical data
-            print(f"📈 Sending historical data for {symbol}")
+            print(f"📈 Sending historical data for {symbol}", flush=True)
             await self._send_historical_data(websocket, symbol, timeframe)
-            print(f"✅ Historical data sent for {symbol}")
+            print(f"✅ Historical data sent for {symbol}", flush=True)
             
         except Exception as e:
-            print(f"❌ Error in add_connection for {symbol}: {e}")
+            print(f"❌ Error in add_connection for {symbol}: {e}", flush=True)
             raise
     
     async def _send_historical_data(self, websocket, symbol, timeframe):
         """Send cached historical data with improved caching"""
-        print(f"📈 _send_historical_data called for {symbol} {timeframe}")
+        print(f"📈 _send_historical_data called for {symbol} {timeframe}", flush=True)
         try:
             # Multi-level cache: Redis -> Memory -> Database
             cache_key = CacheKeys.websocket_history(symbol, timeframe)
-            print(f"🔑 Cache key: {cache_key}")
+            print(f"🔑 Cache key: {cache_key}", flush=True)
             
             # Check memory cache first (fastest)
             if hasattr(self, 'memory_cache') and cache_key in self.memory_cache:
                 cached_data = self.memory_cache[cache_key]
                 if (datetime.now() - cached_data['timestamp']).total_seconds() < 300:  # 5 min TTL
-                    print(f"💾 Using memory cache for {symbol}")
+                    print(f"💾 Using memory cache for {symbol}", flush=True)
                     await websocket.send_text(cached_data['message'])
                     return
                 else:
-                    print(f"⏰ Memory cache expired for {symbol}")
+                    print(f"⏰ Memory cache expired for {symbol}", flush=True)
             else:
-                print(f"🚫 No memory cache for {symbol}")
+                print(f"🚫 No memory cache for {symbol}", flush=True)
             
             # Try Redis cache
             try:
@@ -500,15 +500,15 @@ class RealTimeWebSocketService:
             
             # Use database from constructor or fallback to global
             db = self.database
-            print(f"📊 Database available: {db is not None and hasattr(db, 'pool') and db.pool is not None}")
+            print(f"📊 Database available: {db is not None and hasattr(db, 'pool') and db.pool is not None}", flush=True)
             if not db or not db.pool:
                 try:
                     from database import db as global_db
                     if global_db and global_db.pool:
                         db = global_db
-                        print(f"🔄 Using global database")
+                        print(f"🔄 Using global database", flush=True)
                     else:
-                        print(f"❌ No database available for {symbol}")
+                        print(f"❌ No database available for {symbol}", flush=True)
                         # Send minimal response instead of failing
                         minimal_data = {
                             "type": "historical_data",
@@ -542,7 +542,7 @@ class RealTimeWebSocketService:
                 forecast_data = forecast_data[-min_length:]
                 timestamps = timestamps[-min_length:]
                 
-                print(f"📊 Historical data for {symbol}: {len(actual_data)} actual, {len(forecast_data)} forecast, {len(timestamps)} timestamps")
+                print(f"📊 Historical data for {symbol}: {len(actual_data)} actual, {len(forecast_data)} forecast, {len(timestamps)} timestamps", flush=True)
             else:
                 # Force database query with timeframe-specific symbol
                 timeframe_symbol = f"{symbol}_{timeframe}" if timeframe in ['1m', '5m', '15m', '1h', '4h', '1D', '1W'] else symbol
@@ -559,9 +559,9 @@ class RealTimeWebSocketService:
                     forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
                     timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
                     
-                    print(f"📊 Fallback data for {symbol}: {len(actual_data)} actual, {len(forecast_data)} forecast")
+                    print(f"📊 Fallback data for {symbol}: {len(actual_data)} actual, {len(forecast_data)} forecast", flush=True)
                 else:
-                    print(f"❌ No database data for {symbol}_{timeframe} - not sending fake data")
+                    print(f"❌ No database data for {symbol}_{timeframe} - not sending fake data", flush=True)
                     return
             
             historical_message = {
@@ -596,7 +596,7 @@ class RealTimeWebSocketService:
             await websocket.send_text(message_json)
             
         except Exception as e:
-            print(f"❌ _send_historical_data failed for {symbol}: {e}")
+            print(f"❌ _send_historical_data failed for {symbol}: {e}", flush=True)
             # Send error response instead of silent failure
             try:
                 error_data = {
