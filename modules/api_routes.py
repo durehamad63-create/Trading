@@ -117,173 +117,173 @@ def setup_routes(app: FastAPI, model, database=None):
             
             assets = []
         
-        # Use simple concurrent execution for speed
-        import asyncio
-        
-        async def get_prediction_fast(symbol):
-            # Check cache using centralized manager
-            cache_key = cache_keys.prediction(symbol)
-            cached_data = cache_manager.get_cache(cache_key)
-            if cached_data:
-                return cached_data
+            # Use simple concurrent execution for speed
+            import asyncio
             
-            # Fallback to memory cache
-            if symbol in prediction_cache:
-                cache_age = (datetime.now() - prediction_cache[symbol]['timestamp']).total_seconds()
-                if cache_age < cache_timeout:
-                    return prediction_cache[symbol]['data']
-            
-            # Only return data if model is available and working
-            if not model:
-                return None
-                
-            try:
-                prediction = await model.predict(symbol)
-                prediction['name'] = multi_asset.get_asset_name(symbol)
-                
-                # Cache using centralized manager
+            async def get_prediction_fast(symbol):
+                # Check cache using centralized manager
                 cache_key = cache_keys.prediction(symbol)
-                cache_manager.set_cache(cache_key, prediction, cache_timeout)
+                cached_data = cache_manager.get_cache(cache_key)
+                if cached_data:
+                    return cached_data
                 
-                # Also cache in memory as fallback
-                prediction_cache[symbol] = {
-                    'data': prediction,
-                    'timestamp': datetime.now()
-                }
+                # Fallback to memory cache
+                if symbol in prediction_cache:
+                    cache_age = (datetime.now() - prediction_cache[symbol]['timestamp']).total_seconds()
+                    if cache_age < cache_timeout:
+                        return prediction_cache[symbol]['data']
                 
-                return prediction
-            except Exception as e:
-                return None
-        
-        # Get data based on class filter
-        
-        if class_filter == "crypto":
-            for symbol in crypto_symbols[:limit]:
-                cache_key = cache_keys.price(symbol, 'crypto')
-                price_data = cache_manager.get_cache(cache_key)
-                
-                if not price_data and realtime_service and hasattr(realtime_service, 'price_cache'):
-                    if symbol in realtime_service.price_cache:
-                        price_data = realtime_service.price_cache[symbol]
-                
-                if price_data:
-                    assets.append({
-                        'symbol': symbol,
-                        'name': multi_asset.get_asset_name(symbol),
-                        'current_price': price_data['current_price'],
-                        'change_24h': price_data['change_24h'],
-                        'volume': price_data['volume'],
-                        'forecast_direction': 'UP' if price_data['change_24h'] > 1 else 'DOWN' if price_data['change_24h'] < -1 else 'HOLD',
-                        'confidence': min(80, max(60, 70 + abs(price_data['change_24h']))),
-                        'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
-                        'data_source': 'Binance Stream',
-                        'asset_class': 'crypto'
-                    })
-        
-        elif class_filter == "stocks":
-            for symbol in stock_symbols[:limit]:
-                cache_key = cache_keys.price(symbol, 'stock')
-                price_data = cache_manager.get_cache(cache_key)
-                
-                if not price_data and stock_realtime_service and hasattr(stock_realtime_service, 'price_cache'):
-                    if symbol in stock_realtime_service.price_cache:
-                        price_data = stock_realtime_service.price_cache[symbol]
-                
-                if price_data:
-                    assets.append({
-                        'symbol': symbol,
-                        'name': stock_realtime_service.stock_symbols.get(symbol, symbol) if stock_realtime_service else symbol,
-                        'current_price': price_data['current_price'],
-                        'change_24h': price_data['change_24h'],
-                        'volume': price_data['volume'],
-                        'forecast_direction': 'UP' if price_data['change_24h'] > 0.5 else 'DOWN' if price_data['change_24h'] < -0.5 else 'HOLD',
-                        'confidence': min(85, max(65, 75 + abs(price_data['change_24h']))),
-                        'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
-                        'data_source': price_data.get('data_source', 'Stock API'),
-                        'asset_class': 'stocks'
-                    })
-        
-        elif class_filter == "macro":
-            print(f"🔍 MACRO REQUEST - Service available: {macro_realtime_service is not None}")
-            if macro_realtime_service:
-                print(f"🔍 MACRO CACHE - Size: {len(macro_realtime_service.price_cache) if hasattr(macro_realtime_service, 'price_cache') else 0}")
-            
-            for symbol in macro_symbols:
-                cache_key = cache_keys.price(symbol, 'macro')
-                price_data = cache_manager.get_cache(cache_key)
-                
-                if not price_data and macro_realtime_service and hasattr(macro_realtime_service, 'price_cache'):
-                    if symbol in macro_realtime_service.price_cache:
-                        price_data = macro_realtime_service.price_cache[symbol]
-                
-                if price_data:
-                    unit = price_data.get('unit', '')
-                    if unit == 'B':
-                        formatted_price = f"${price_data['current_price']:.0f}B"
-                    elif unit == '%':
-                        formatted_price = f"{price_data['current_price']:.2f}%"
-                    else:
-                        formatted_price = f"{price_data['current_price']:.1f}"
+                # Only return data if model is available and working
+                if not model:
+                    return None
                     
-                    assets.append({
-                        'symbol': symbol,
-                        'name': multi_asset.get_asset_name(symbol),
-                        'current_price': price_data['current_price'],
-                        'formatted_price': formatted_price,
-                        'change_24h': price_data['change_24h'],
-                        'volume': price_data['volume'],
-                        'forecast_direction': 'UP' if price_data['change_24h'] > 0.01 else 'DOWN' if price_data['change_24h'] < -0.01 else 'HOLD',
-                        'confidence': min(90, max(70, 80 + abs(price_data['change_24h']) * 10)),
-                        'data_source': 'Economic Simulation',
-                        'asset_class': 'macro'
-                    })
-        
-        else:  # "all" case
-            # Add crypto assets (exclude stablecoins)
-            for symbol in [s for s in crypto_symbols[:min(limit//2, 5)] if s not in ['USDT', 'USDC']]:
-                cache_key = cache_keys.price(symbol, 'crypto')
-                price_data = cache_manager.get_cache(cache_key)
-                
-                if not price_data and realtime_service and hasattr(realtime_service, 'price_cache'):
-                    if symbol in realtime_service.price_cache:
-                        price_data = realtime_service.price_cache[symbol]
-                
-                if price_data:
-                    assets.append({
-                        'symbol': symbol,
-                        'name': multi_asset.get_asset_name(symbol),
-                        'current_price': price_data['current_price'],
-                        'change_24h': price_data['change_24h'],
-                        'volume': price_data['volume'],
-                        'forecast_direction': 'UP' if price_data['change_24h'] > 1 else 'DOWN' if price_data['change_24h'] < -1 else 'HOLD',
-                        'confidence': min(80, max(60, 70 + abs(price_data['change_24h']))),
-                        'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
-                        'data_source': 'Binance Stream',
-                        'asset_class': 'crypto'
-                    })
+                try:
+                    prediction = await model.predict(symbol)
+                    prediction['name'] = multi_asset.get_asset_name(symbol)
+                    
+                    # Cache using centralized manager
+                    cache_key = cache_keys.prediction(symbol)
+                    cache_manager.set_cache(cache_key, prediction, cache_timeout)
+                    
+                    # Also cache in memory as fallback
+                    prediction_cache[symbol] = {
+                        'data': prediction,
+                        'timestamp': datetime.now()
+                    }
+                    
+                    return prediction
+                except Exception as e:
+                    return None
             
-            # Add stock assets
-            for symbol in stock_symbols[:min(limit//2, 5)]:
-                cache_key = cache_keys.price(symbol, 'stock')
-                price_data = cache_manager.get_cache(cache_key)
+            # Get data based on class filter
+            
+            if class_filter == "crypto":
+                for symbol in crypto_symbols[:limit]:
+                    cache_key = cache_keys.price(symbol, 'crypto')
+                    price_data = cache_manager.get_cache(cache_key)
+                    
+                    if not price_data and realtime_service and hasattr(realtime_service, 'price_cache'):
+                        if symbol in realtime_service.price_cache:
+                            price_data = realtime_service.price_cache[symbol]
+                    
+                    if price_data:
+                        assets.append({
+                            'symbol': symbol,
+                            'name': multi_asset.get_asset_name(symbol),
+                            'current_price': price_data['current_price'],
+                            'change_24h': price_data['change_24h'],
+                            'volume': price_data['volume'],
+                            'forecast_direction': 'UP' if price_data['change_24h'] > 1 else 'DOWN' if price_data['change_24h'] < -1 else 'HOLD',
+                            'confidence': min(80, max(60, 70 + abs(price_data['change_24h']))),
+                            'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
+                            'data_source': 'Binance Stream',
+                            'asset_class': 'crypto'
+                        })
+            
+            elif class_filter == "stocks":
+                for symbol in stock_symbols[:limit]:
+                    cache_key = cache_keys.price(symbol, 'stock')
+                    price_data = cache_manager.get_cache(cache_key)
+                    
+                    if not price_data and stock_realtime_service and hasattr(stock_realtime_service, 'price_cache'):
+                        if symbol in stock_realtime_service.price_cache:
+                            price_data = stock_realtime_service.price_cache[symbol]
+                    
+                    if price_data:
+                        assets.append({
+                            'symbol': symbol,
+                            'name': stock_realtime_service.stock_symbols.get(symbol, symbol) if stock_realtime_service else symbol,
+                            'current_price': price_data['current_price'],
+                            'change_24h': price_data['change_24h'],
+                            'volume': price_data['volume'],
+                            'forecast_direction': 'UP' if price_data['change_24h'] > 0.5 else 'DOWN' if price_data['change_24h'] < -0.5 else 'HOLD',
+                            'confidence': min(85, max(65, 75 + abs(price_data['change_24h']))),
+                            'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
+                            'data_source': price_data.get('data_source', 'Stock API'),
+                            'asset_class': 'stocks'
+                        })
+            
+            elif class_filter == "macro":
+                print(f"🔍 MACRO REQUEST - Service available: {macro_realtime_service is not None}")
+                if macro_realtime_service:
+                    print(f"🔍 MACRO CACHE - Size: {len(macro_realtime_service.price_cache) if hasattr(macro_realtime_service, 'price_cache') else 0}")
                 
-                if not price_data and stock_realtime_service and hasattr(stock_realtime_service, 'price_cache'):
-                    if symbol in stock_realtime_service.price_cache:
-                        price_data = stock_realtime_service.price_cache[symbol]
+                for symbol in macro_symbols:
+                    cache_key = cache_keys.price(symbol, 'macro')
+                    price_data = cache_manager.get_cache(cache_key)
+                    
+                    if not price_data and macro_realtime_service and hasattr(macro_realtime_service, 'price_cache'):
+                        if symbol in macro_realtime_service.price_cache:
+                            price_data = macro_realtime_service.price_cache[symbol]
+                    
+                    if price_data:
+                        unit = price_data.get('unit', '')
+                        if unit == 'B':
+                            formatted_price = f"${price_data['current_price']:.0f}B"
+                        elif unit == '%':
+                            formatted_price = f"{price_data['current_price']:.2f}%"
+                        else:
+                            formatted_price = f"{price_data['current_price']:.1f}"
+                        
+                        assets.append({
+                            'symbol': symbol,
+                            'name': multi_asset.get_asset_name(symbol),
+                            'current_price': price_data['current_price'],
+                            'formatted_price': formatted_price,
+                            'change_24h': price_data['change_24h'],
+                            'volume': price_data['volume'],
+                            'forecast_direction': 'UP' if price_data['change_24h'] > 0.01 else 'DOWN' if price_data['change_24h'] < -0.01 else 'HOLD',
+                            'confidence': min(90, max(70, 80 + abs(price_data['change_24h']) * 10)),
+                            'data_source': 'Economic Simulation',
+                            'asset_class': 'macro'
+                        })
+            
+            else:  # "all" case
+                # Add crypto assets (exclude stablecoins)
+                for symbol in [s for s in crypto_symbols[:min(limit//2, 5)] if s not in ['USDT', 'USDC']]:
+                    cache_key = cache_keys.price(symbol, 'crypto')
+                    price_data = cache_manager.get_cache(cache_key)
+                    
+                    if not price_data and realtime_service and hasattr(realtime_service, 'price_cache'):
+                        if symbol in realtime_service.price_cache:
+                            price_data = realtime_service.price_cache[symbol]
+                    
+                    if price_data:
+                        assets.append({
+                            'symbol': symbol,
+                            'name': multi_asset.get_asset_name(symbol),
+                            'current_price': price_data['current_price'],
+                            'change_24h': price_data['change_24h'],
+                            'volume': price_data['volume'],
+                            'forecast_direction': 'UP' if price_data['change_24h'] > 1 else 'DOWN' if price_data['change_24h'] < -1 else 'HOLD',
+                            'confidence': min(80, max(60, 70 + abs(price_data['change_24h']))),
+                            'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
+                            'data_source': 'Binance Stream',
+                            'asset_class': 'crypto'
+                        })
                 
-                if price_data:
-                    assets.append({
-                        'symbol': symbol,
-                        'name': stock_realtime_service.stock_symbols.get(symbol, symbol) if stock_realtime_service else symbol,
-                        'current_price': price_data['current_price'],
-                        'change_24h': price_data['change_24h'],
-                        'volume': price_data['volume'],
-                        'forecast_direction': 'UP' if price_data['change_24h'] > 0.5 else 'DOWN' if price_data['change_24h'] < -0.5 else 'HOLD',
-                        'confidence': min(85, max(65, 75 + abs(price_data['change_24h']))),
-                        'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
-                        'data_source': price_data.get('data_source', 'Stock API'),
-                        'asset_class': 'stocks'
-                    })
+                # Add stock assets
+                for symbol in stock_symbols[:min(limit//2, 5)]:
+                    cache_key = cache_keys.price(symbol, 'stock')
+                    price_data = cache_manager.get_cache(cache_key)
+                    
+                    if not price_data and stock_realtime_service and hasattr(stock_realtime_service, 'price_cache'):
+                        if symbol in stock_realtime_service.price_cache:
+                            price_data = stock_realtime_service.price_cache[symbol]
+                    
+                    if price_data:
+                        assets.append({
+                            'symbol': symbol,
+                            'name': stock_realtime_service.stock_symbols.get(symbol, symbol) if stock_realtime_service else symbol,
+                            'current_price': price_data['current_price'],
+                            'change_24h': price_data['change_24h'],
+                            'volume': price_data['volume'],
+                            'forecast_direction': 'UP' if price_data['change_24h'] > 0.5 else 'DOWN' if price_data['change_24h'] < -0.5 else 'HOLD',
+                            'confidence': min(85, max(65, 75 + abs(price_data['change_24h']))),
+                            'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
+                            'data_source': price_data.get('data_source', 'Stock API'),
+                            'asset_class': 'stocks'
+                        })
         
             return {"assets": assets}
         except Exception as e:
