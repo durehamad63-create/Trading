@@ -42,20 +42,25 @@ class StockRealtimeService:
         self.last_update = {}
         self.session = None
         
-        # Initialize Redis for stock caching
+        # Initialize Redis for stock caching with Railway compatibility
         self.redis_client = None
         try:
             import redis
             self.redis_client = redis.Redis(
                 host=os.getenv('REDIS_HOST', 'localhost'),
                 port=int(os.getenv('REDIS_PORT', '6379')),
-                db=int(os.getenv('REDIS_PREDICTION_DB', '1')),
+                db=0,  # Use DB 0 for Railway compatibility
                 password=os.getenv('REDIS_PASSWORD', None) if os.getenv('REDIS_PASSWORD') else None,
                 decode_responses=True,
-                socket_connect_timeout=5,
-                socket_timeout=5
+                socket_connect_timeout=10,
+                socket_timeout=10
             )
+            
+            # Test connection
             self.redis_client.ping()
+            test_key = "stock_test_key"
+            self.redis_client.setex(test_key, 5, "stock_test_value")
+            
         except Exception as e:
             self.redis_client = None
     
@@ -102,10 +107,20 @@ class StockRealtimeService:
             price_data = await self._get_realtime_stock_data(symbol)
             if price_data:
                 # Update cache
-                self.price_cache[symbol] = {
+                cache_data = {
                     **price_data,
                     'timestamp': datetime.now()
                 }
+                self.price_cache[symbol] = cache_data
+                
+                # Cache in Redis for external access
+                if self.redis_client:
+                    try:
+                        import json
+                        cache_key = f"stock:{symbol}:price"
+                        self.redis_client.setex(cache_key, 15, json.dumps(cache_data, default=str))
+                    except Exception:
+                        pass
                 
 
                 
