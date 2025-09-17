@@ -73,13 +73,9 @@ class RealTimeWebSocketService:
                 }
                 print(f"🔄 Pre-cached {symbol}: ${price}")
                 
-                # Also cache in Redis immediately
-                if self.redis_client:
-                    try:
-                        cache_key = f"stream:{symbol}:price"
-                        self.redis_client.setex(cache_key, 300, json.dumps(self.price_cache[symbol], default=str))
-                    except Exception:
-                        pass
+                # Cache using centralized manager
+                cache_key = self.cache_keys.price(symbol, 'crypto')
+                self.cache_manager.set_cache(cache_key, self.price_cache[symbol], ttl=30)
             
             print(f"✅ Initial cache populated with {len(self.price_cache)} symbols")
             
@@ -639,13 +635,9 @@ class RealTimeWebSocketService:
                                                 self.price_cache[symbol] = price_data
                                                 print(f"🔄 Fallback cached {symbol}: ${price_data['current_price']:.2f}")
                                                 
-                                                # Cache in Redis too
-                                                if self.redis_client:
-                                                    try:
-                                                        cache_key = f"stream:{symbol}:price"
-                                                        self.redis_client.setex(cache_key, 60, json.dumps(price_data, default=str))
-                                                    except Exception:
-                                                        pass
+                                                # Cache using centralized manager
+                                                cache_key = self.cache_keys.price(symbol, 'crypto')
+                                                self.cache_manager.set_cache(cache_key, price_data, ttl=30)
                                     except Exception as e:
                                         print(f"❌ Fallback failed for {symbol}: {e}")
                     except Exception as e:
@@ -674,13 +666,9 @@ class RealTimeWebSocketService:
                         self.price_cache[symbol] = price_data
                         print(f"🔄 Fallback data for {symbol}: ${price_data['current_price']:.2f}")
                         
-                        # Cache in Redis
-                        if self.redis_client:
-                            try:
-                                cache_key = f"stream:{symbol}:price"
-                                self.redis_client.setex(cache_key, 60, json.dumps(price_data, default=str))
-                            except Exception:
-                                pass
+                        # Cache using centralized manager
+                        cache_key = self.cache_keys.price(symbol, 'crypto')
+                        self.cache_manager.set_cache(cache_key, price_data, ttl=30)
                                 
         except Exception as e:
             print(f"❌ Fallback crypto data failed for {symbol}: {e}")

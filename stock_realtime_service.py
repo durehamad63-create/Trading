@@ -98,15 +98,10 @@ class StockRealtimeService:
                 }
                 self.price_cache[symbol] = cache_data
                 
-                # Cache in Redis for external access
-                if self.redis_client:
-                    try:
-                        import json
-                        cache_key = f"stock:{symbol}:price"
-                        self.redis_client.setex(cache_key, 15, json.dumps(cache_data, default=str))
-                        print(f"📊 Stock cached {symbol}: ${price_data['current_price']:.2f} ({price_data['change_24h']:+.2f}%)")
-                    except Exception as e:
-                        print(f"❌ Stock cache failed for {symbol}: {e}")
+                # Cache using centralized manager
+                cache_key = self.cache_keys.price(symbol, 'stock')
+                self.cache_manager.set_cache(cache_key, cache_data, ttl=30)
+                print(f"📊 Stock cached {symbol}: ${price_data['current_price']:.2f} ({price_data['change_24h']:+.2f}%)")
                 
 
                 

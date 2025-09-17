@@ -110,11 +110,12 @@ def setup_routes(app: FastAPI, model, database=None):
             await rate_limiter.check_rate_limit(request)
         """Get market summary with real predictions for crypto, stocks, and macro"""
         
-        crypto_symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX']
-        stock_symbols = ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM']
-        macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
-        
-        assets = []
+        try:
+            crypto_symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX']
+            stock_symbols = ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM']
+            macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
+            
+            assets = []
         
         # Use simple concurrent execution for speed
         import asyncio
@@ -203,6 +204,10 @@ def setup_routes(app: FastAPI, model, database=None):
                     })
         
         elif class_filter == "macro":
+            print(f"🔍 MACRO REQUEST - Service available: {macro_realtime_service is not None}")
+            if macro_realtime_service:
+                print(f"🔍 MACRO CACHE - Size: {len(macro_realtime_service.price_cache) if hasattr(macro_realtime_service, 'price_cache') else 0}")
+            
             for symbol in macro_symbols:
                 cache_key = cache_keys.price(symbol, 'macro')
                 price_data = cache_manager.get_cache(cache_key)
@@ -280,7 +285,10 @@ def setup_routes(app: FastAPI, model, database=None):
                         'asset_class': 'stocks'
                     })
         
-        return {"assets": assets}
+            return {"assets": assets}
+        except Exception as e:
+            print(f"❌ Market summary error: {e}")
+            return {"assets": [], "error": str(e)}
 
     @app.get("/api/asset/{symbol}/trends")
     async def asset_trends(symbol: str, timeframe: str = "7D", view: str = "chart"):
