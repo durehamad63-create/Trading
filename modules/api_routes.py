@@ -12,10 +12,10 @@ import io
 from multi_asset_support import multi_asset
 from rate_limiter import rate_limiter
 from accuracy_validator import accuracy_validator
-from realtime_websocket_service import realtime_service
+# Global variables for services (set by main.py)
+realtime_service = None
 from utils.cache_manager import CacheKeys
 
-# Global variables for services (set by main.py)
 stock_realtime_service = None
 macro_realtime_service = None
 

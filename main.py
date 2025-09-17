@@ -100,6 +100,7 @@ async def lifespan(app: FastAPI):
     rws_module.realtime_service = realtime_service
     stock_module.stock_realtime_service = stock_service
     macro_module.macro_realtime_service = macro_service
+    api_module.realtime_service = realtime_service
     api_module.stock_realtime_service = stock_service
     api_module.macro_realtime_service = macro_service
     
