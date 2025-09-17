@@ -671,7 +671,8 @@ def setup_routes(app: FastAPI, model, database=None):
             except:
                 pass
             return
-            
+        
+        try:
             print(f"🚀 Starting WebSocket loop for {symbol}", flush=True)
             sys.stdout.flush()
             

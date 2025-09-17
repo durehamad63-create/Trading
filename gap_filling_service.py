@@ -58,7 +58,7 @@ class GapFillingService:
         try:
             async with self.db.pool.acquire() as conn:
                 count = await conn.fetchval(
-                    "SELECT COUNT(*) FROM actual_prices WHERE symbol = $1 AND created_at >= $2",
+                    "SELECT COUNT(*) FROM actual_prices WHERE symbol = $1 AND timestamp >= $2",
                     timeframe_symbol, datetime.now() - timedelta(days=30)
                 )
                 
@@ -161,9 +161,9 @@ class GapFillingService:
                 for data_point in data_points:
                     # Store actual price
                     await conn.execute("""
-                        INSERT INTO actual_prices (symbol, current_price, change_24h, volume, created_at)
+                        INSERT INTO actual_prices (symbol, current_price, change_24h, volume, timestamp)
                         VALUES ($1, $2, $3, $4, $5)
-                        ON CONFLICT (symbol, created_at) DO NOTHING
+                        ON CONFLICT (symbol, timestamp) DO NOTHING
                     """, timeframe_symbol, data_point['current_price'], data_point['change_24h'],
                         data_point['volume'], data_point['timestamp'])
                     
@@ -174,9 +174,9 @@ class GapFillingService:
                             prediction = await self.model.predict(symbol)
                             
                             await conn.execute("""
-                                INSERT INTO forecasts (symbol, forecast_direction, confidence, predicted_price, predicted_range, created_at)
+                                INSERT INTO forecasts (symbol, forecast_direction, confidence, predicted_price, predicted_range, timestamp)
                                 VALUES ($1, $2, $3, $4, $5, $6)
-                                ON CONFLICT (symbol, created_at) DO NOTHING
+                                ON CONFLICT (symbol, timestamp) DO NOTHING
                             """, timeframe_symbol, prediction.get('forecast_direction', 'HOLD'),
                                 prediction.get('confidence', 75), prediction.get('predicted_price', data_point['current_price']),
                                 prediction.get('predicted_range', 'N/A'), data_point['timestamp'])
