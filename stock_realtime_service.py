@@ -60,8 +60,10 @@ class StockRealtimeService:
             self.redis_client.ping()
             test_key = "stock_test_key"
             self.redis_client.setex(test_key, 5, "stock_test_value")
+            print(f"✅ Stock Redis connected: {os.getenv('REDIS_HOST')}:{os.getenv('REDIS_PORT')} (DB 0)")
             
         except Exception as e:
+            print(f"⚠️ Stock Redis failed: {e}")
             self.redis_client = None
     
     async def start_stock_streams(self):
@@ -69,6 +71,7 @@ class StockRealtimeService:
         self.session = aiohttp.ClientSession()
         
         # Start single rotating stream for all stocks
+        print(f"🚀 Starting stock streams for {len(self.stock_symbols)} symbols...")
         asyncio.create_task(self._rotating_stock_stream())
     
     async def _rotating_stock_stream(self):
@@ -106,6 +109,7 @@ class StockRealtimeService:
             # Get real-time price data
             price_data = await self._get_realtime_stock_data(symbol)
             if price_data:
+                print(f"💹 Stock data: {symbol} = ${price_data['current_price']:.2f}")
                 # Update cache
                 cache_data = {
                     **price_data,
@@ -119,8 +123,9 @@ class StockRealtimeService:
                         import json
                         cache_key = f"stock:{symbol}:price"
                         self.redis_client.setex(cache_key, 15, json.dumps(cache_data, default=str))
-                    except Exception:
-                        pass
+                        print(f"📊 Stock cached {symbol}: ${price_data['current_price']:.2f} ({price_data['change_24h']:+.2f}%)")
+                    except Exception as e:
+                        print(f"❌ Stock cache failed for {symbol}: {e}")
                 
 
                 
@@ -134,6 +139,7 @@ class StockRealtimeService:
                     # ML predictions in background
                     asyncio.create_task(self._update_stock_candles_and_forecast(symbol, price_data))
         except Exception as e:
+            print(f"❌ Stock {symbol} error: {e}")
             ErrorHandler.log_stream_error('stock', symbol, str(e))
     
 

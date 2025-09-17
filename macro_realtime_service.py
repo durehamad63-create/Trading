@@ -31,11 +31,40 @@ class MacroRealtimeService:
         load_dotenv()
         self.session = None
         
+        # Initialize Redis for macro caching (unified with other services)
+        self.redis_client = None
+        try:
+            import redis
+            redis_host = os.getenv('REDIS_HOST', 'localhost')
+            redis_port = int(os.getenv('REDIS_PORT', '6379'))
+            redis_password = os.getenv('REDIS_PASSWORD', None) if os.getenv('REDIS_PASSWORD') else None
+            
+            self.redis_client = redis.Redis(
+                host=redis_host,
+                port=redis_port,
+                db=0,  # Use DB 0 for Railway compatibility (unified)
+                password=redis_password,
+                decode_responses=True,
+                socket_connect_timeout=10,
+                socket_timeout=10
+            )
+            
+            # Test connection
+            self.redis_client.ping()
+            test_key = "macro_test_key"
+            self.redis_client.setex(test_key, 5, "macro_test_value")
+            print(f"✅ Macro Redis connected: {redis_host}:{redis_port} (DB 0)")
+            
+        except Exception as e:
+            print(f"⚠️ Macro Redis failed: {e}")
+            self.redis_client = None
+        
     async def start_macro_streams(self):
         """Start macro indicators simulation"""
         self.session = aiohttp.ClientSession()
         
         # Start macro data simulation
+        print(f"🚀 Starting macro streams for {len(self.macro_indicators)} indicators...")
         asyncio.create_task(self._macro_data_stream())
         
     async def _macro_data_stream(self):
@@ -59,13 +88,24 @@ class MacroRealtimeService:
                     change_pct = change * 100
                     
                     # Update cache
-                    self.price_cache[symbol] = {
+                    cache_data = {
                         'current_price': new_value,
                         'change_24h': change_pct,
                         'volume': 1000000,  # Simulated volume
                         'timestamp': datetime.now(),
                         'unit': config['unit']
                     }
+                    self.price_cache[symbol] = cache_data
+                    
+                    # Cache in Redis for external access (unified cache)
+                    if self.redis_client:
+                        try:
+                            import json
+                            cache_key = f"macro:{symbol}:price"
+                            self.redis_client.setex(cache_key, 60, json.dumps(cache_data, default=str))
+                            print(f"📊 Macro cached {symbol}: {new_value:.2f} ({change_pct:+.3f}%)")
+                        except Exception as e:
+                            print(f"❌ Macro cache failed for {symbol}: {e}")
                     
                     # Macro updates (logging removed)
                     

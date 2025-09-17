@@ -247,6 +247,7 @@ def setup_routes(app: FastAPI, model, database=None):
         
         elif class_filter == "macro":
             if macro_realtime_service and hasattr(macro_realtime_service, 'price_cache'):
+                print(f"💰 Macro cache has {len(macro_realtime_service.price_cache)} indicators: {list(macro_realtime_service.price_cache.keys())}")
                 for symbol in symbols:
                     if symbol in macro_realtime_service.price_cache:
                         price_data = macro_realtime_service.price_cache[symbol]
@@ -258,6 +259,7 @@ def setup_routes(app: FastAPI, model, database=None):
                         else:
                             formatted_price = f"{price_data['current_price']:.1f}"
                         
+                        print(f"✅ Adding macro: {symbol} = {formatted_price}")
                         assets.append({
                             'symbol': symbol,
                             'name': multi_asset.get_asset_name(symbol),
@@ -267,7 +269,8 @@ def setup_routes(app: FastAPI, model, database=None):
                             'volume': price_data['volume'],
                             'forecast_direction': 'UP' if price_data['change_24h'] > 0.01 else 'DOWN' if price_data['change_24h'] < -0.01 else 'HOLD',
                             'confidence': min(90, max(70, 80 + abs(price_data['change_24h']) * 10)),
-                            'data_source': 'Economic Simulation'
+                            'data_source': 'Economic Simulation',
+                            'asset_class': 'macro'
                         })
         
         else:  # "all" case
@@ -1172,11 +1175,13 @@ def setup_routes(app: FastAPI, model, database=None):
             # Get crypto data - only from crypto symbols
             if realtime_service and hasattr(realtime_service, 'price_cache'):
                 crypto_count = 0
+                print(f"📊 Crypto cache has {len(realtime_service.price_cache)} symbols: {list(realtime_service.price_cache.keys())}")
                 for symbol in realtime_service.price_cache.keys():
                     if symbol in crypto_symbols:  # Only include if in crypto list
                         price_data = realtime_service.price_cache[symbol]
                         change = price_data['change_24h']
                         crypto_count += 1
+                        print(f"✅ Adding crypto: {symbol} = ${price_data['current_price']:.2f}")
                         
                         assets.append({
                             'symbol': symbol,
@@ -1195,11 +1200,13 @@ def setup_routes(app: FastAPI, model, database=None):
             # Get stock data - only from stock symbols
             if stock_realtime_service and hasattr(stock_realtime_service, 'price_cache'):
                 stock_count = 0
+                print(f"💹 Stock cache has {len(stock_realtime_service.price_cache)} symbols: {list(stock_realtime_service.price_cache.keys())}")
                 for symbol in stock_realtime_service.price_cache.keys():
                     if symbol in stock_symbols:  # Only include if in stock list
                         price_data = stock_realtime_service.price_cache[symbol]
                         change = price_data['change_24h']
                         stock_count += 1
+                        print(f"✅ Adding stock: {symbol} = ${price_data['current_price']:.2f}")
                         
                         assets.append({
                             'symbol': symbol,
@@ -1226,9 +1233,15 @@ def setup_routes(app: FastAPI, model, database=None):
                     redis_client.setex(cache_key, 2, json.dumps(assets))
                     crypto_count = len([a for a in assets if a.get('asset_class') == 'crypto'])
                     stock_count = len([a for a in assets if a.get('asset_class') == 'stocks'])
+                    macro_count = len([a for a in assets if a.get('asset_class') == 'macro'])
+                    print(f"💾 Cached market summary: {len(assets)} assets (crypto: {crypto_count}, stocks: {stock_count}, macro: {macro_count})")
                 except Exception as e:
-                    pass
+                    print(f"❌ Market cache failed: {e}")
             
+            crypto_final = len([a for a in assets if a.get('asset_class') == 'crypto'])
+            stock_final = len([a for a in assets if a.get('asset_class') == 'stocks'])
+            macro_final = len([a for a in assets if a.get('asset_class') == 'macro'])
+            print(f"📊 Final market data: {len(assets)} assets (crypto: {crypto_final}, stocks: {stock_final}, macro: {macro_final})")
             return assets
         
         try:
@@ -1266,6 +1279,7 @@ def setup_routes(app: FastAPI, model, database=None):
                             "update_count": len(assets),
                             "crypto_count": len([a for a in assets if a.get('asset_class') == 'crypto']),
                             "stock_count": len([a for a in assets if a.get('asset_class') == 'stocks']),
+                            "macro_count": len([a for a in assets if a.get('asset_class') == 'macro']),
                             "interval": 2
                         }
                         

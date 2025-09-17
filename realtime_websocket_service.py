@@ -59,14 +59,18 @@ class RealTimeWebSocketService:
             self.redis_client.ping()
             test_key = "stream_test_key"
             self.redis_client.setex(test_key, 5, "stream_test_value")
+            print(f"✅ Stream Redis connected: {redis_host}:{redis_port} (DB 0)")
             
         except Exception as e:
+            print(f"⚠️ Stream Redis failed: {e}")
             self.redis_client = None
     
     async def start_binance_streams(self):
         """Start Binance WebSocket streams for all symbols immediately"""
         # Start all symbols immediately with minimal delay
+        print(f"🚀 Starting Binance streams for {len(self.binance_symbols)} symbols...")
         for symbol, binance_symbol in self.binance_symbols.items():
+            print(f"📡 Starting stream: {symbol} -> {binance_symbol}")
             asyncio.create_task(self._binance_stream(symbol, binance_symbol))
             await asyncio.sleep(0.1)  # Reduced to 100ms delay
         
@@ -86,6 +90,7 @@ class RealTimeWebSocketService:
                         'volume': 1000000000,  # High volume for stablecoins
                         'timestamp': datetime.now()
                     }
+                    print(f"💰 Stablecoin {symbol} cached: $1.00")
                 
                 await asyncio.sleep(5)  # Update every 5 seconds
                 
@@ -100,7 +105,7 @@ class RealTimeWebSocketService:
         while True:
             try:
                 async with websockets.connect(uri) as websocket:
-                    print(f"✅ Connected: {symbol} stream active")
+                    print(f"✅ Connected: {symbol} stream active (Binance: {binance_symbol})")
                     async for message in websocket:
                         try:
                             data = json.loads(message)
@@ -125,8 +130,9 @@ class RealTimeWebSocketService:
                                     import json
                                     cache_key = f"stream:{symbol}:price"
                                     self.redis_client.setex(cache_key, 10, json.dumps(price_data, default=str))
-                                except Exception:
-                                    pass
+                                    print(f"📊 Cached {symbol}: ${current_price:.2f} ({change_24h:+.2f}%)")
+                                except Exception as e:
+                                    print(f"❌ Cache failed for {symbol}: {e}")
 
                             
                             # Always store data for all timeframes (regardless of connections)
@@ -145,6 +151,7 @@ class RealTimeWebSocketService:
                         
             except Exception as e:
                 error_msg = str(e)
+                print(f"❌ {symbol} stream error: {error_msg}")
                 if "400" in error_msg:
                     ErrorHandler.log_api_error('binance', symbol, '400')
                     await asyncio.sleep(5)
@@ -161,6 +168,7 @@ class RealTimeWebSocketService:
                 # Remove from cache if connection fails
                 if symbol in self.price_cache:
                     del self.price_cache[symbol]
+                    print(f"🗑️ Removed {symbol} from cache due to connection failure")
     
     async def _update_candles_and_forecast(self, symbol, price, volume, change_24h):
         """Update candle data for all timeframes and generate forecasts"""
