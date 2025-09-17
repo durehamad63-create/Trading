@@ -708,8 +708,8 @@ def setup_routes(app: FastAPI, model, database=None):
                             "ping_count": ping_count
                         }
                         await websocket.send_text(json.dumps(realtime_data))
-                        print(f"📡 Sent update #{ping_count} to {symbol}: ${current_price:.2f}", flush=True)
-                        sys.stdout.flush()
+                        if ping_count % 10 == 0:  # Log every 10th update
+                            print(f"📡 Update #{ping_count}: {symbol} = ${current_price:.2f}")
                     else:
                         # Send ping if no price data
                         ping_data = {
@@ -720,8 +720,8 @@ def setup_routes(app: FastAPI, model, database=None):
                             "timestamp": datetime.now().isoformat()
                         }
                         await websocket.send_text(json.dumps(ping_data))
-                        print(f"📡 Sent ping #{ping_count} to {symbol} (no price data)", flush=True)
-                        sys.stdout.flush()
+                        if ping_count % 10 == 0:  # Log every 10th ping
+                            print(f"📡 Ping #{ping_count}: {symbol} (no data)")
                     
                 except Exception as e:
                     print(f"❌ Update failed for {symbol}: {e}", flush=True)
@@ -1223,174 +1223,79 @@ def setup_routes(app: FastAPI, model, database=None):
     
     @app.websocket("/ws/market/summary")
     async def market_summary_websocket(websocket: WebSocket):
-        """Real-time market summary WebSocket with Redis caching for fast filtering"""
-        await websocket.accept()
-        
-        connection_id = await manager.get_or_create_connection(websocket, "market_summary", "live")
-        current_filter = 'all'
-        
-        async def get_cached_market_data():
-            """Get market data from cache or generate if not cached"""
-            cache_key = cache_keys.market_summary("all")
-            
-            # Try cache first
-            cached_data = cache_manager.get_cache(cache_key)
-            if cached_data:
-                return cached_data
-            
-            # Define symbol lists for proper classification
-            crypto_symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX']
-            stock_symbols = ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM']
-            
-            assets = []
-            
-            # Debug: Check if services are available
-            crypto_cache_count = len(realtime_service.price_cache) if realtime_service and hasattr(realtime_service, 'price_cache') else 0
-            stock_cache_count = len(stock_realtime_service.price_cache) if stock_realtime_service and hasattr(stock_realtime_service, 'price_cache') else 0
-            
-            # Get crypto data - only real crypto data (exclude stablecoins for WebSocket)
-            if realtime_service and hasattr(realtime_service, 'price_cache'):
-                crypto_count = 0
-                print(f"📊 Crypto cache has {len(realtime_service.price_cache)} symbols: {list(realtime_service.price_cache.keys())}")
-                # Only include non-stablecoin cryptos that have real data
-                for symbol in ['BTC', 'ETH', 'BNB', 'XRP', 'SOL', 'DOGE', 'ADA', 'TRX']:
-                    if symbol in realtime_service.price_cache:
-                        price_data = realtime_service.price_cache[symbol]
-                        change = price_data['change_24h']
-                        crypto_count += 1
-                        print(f"✅ Adding crypto: {symbol} = ${price_data['current_price']:.2f}")
-                        
-                        assets.append({
-                            'symbol': symbol,
-                            'name': multi_asset.get_asset_name(symbol),
-                            'current_price': price_data['current_price'],
-                            'change_24h': change,
-                            'volume': price_data['volume'],
-                            'forecast_direction': 'UP' if change > 1 else 'DOWN' if change < -1 else 'HOLD',
-                            'confidence': min(80, max(60, 70 + abs(change))),
-                            'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
-                            'data_source': 'Binance Stream',
-                            'asset_class': 'crypto'
-                        })
-
-            
-            # Get stock data - only real stock data
-            if stock_realtime_service and hasattr(stock_realtime_service, 'price_cache'):
-                stock_count = 0
-                print(f"💹 Stock cache has {len(stock_realtime_service.price_cache)} symbols: {list(stock_realtime_service.price_cache.keys())}")
-                # Only include actual stock symbols that have real data
-                for symbol in ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM']:
-                    if symbol in stock_realtime_service.price_cache:
-                        price_data = stock_realtime_service.price_cache[symbol]
-                        change = price_data['change_24h']
-                        stock_count += 1
-                        print(f"✅ Adding stock: {symbol} = ${price_data['current_price']:.2f}")
-                        
-                        assets.append({
-                            'symbol': symbol,
-                            'name': stock_realtime_service.stock_symbols.get(symbol, symbol),
-                            'current_price': price_data['current_price'],
-                            'change_24h': change,
-                            'volume': price_data['volume'],
-                            'forecast_direction': 'UP' if change > 0.5 else 'DOWN' if change < -0.5 else 'HOLD',
-                            'confidence': min(85, max(65, 75 + abs(change))),
-                            'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
-                            'data_source': price_data.get('data_source', 'Stock API'),
-                            'asset_class': 'stocks'
-                        })
-            
-
-
-            
-            # No fallback data - only use real stream data
-
-            
-            # Cache the data for 2 seconds for real-time updates
-            if redis_client and assets:
-                try:
-                    redis_client.setex(cache_key, 2, json.dumps(assets))
-                    crypto_count = len([a for a in assets if a.get('asset_class') == 'crypto'])
-                    stock_count = len([a for a in assets if a.get('asset_class') == 'stocks'])
-                    macro_count = len([a for a in assets if a.get('asset_class') == 'macro'])
-                    print(f"💾 Cached market summary: {len(assets)} assets (crypto: {crypto_count}, stocks: {stock_count}, macro: {macro_count})")
-                except Exception as e:
-                    print(f"❌ Market cache failed: {e}")
-            
-            crypto_final = len([a for a in assets if a.get('asset_class') == 'crypto'])
-            stock_final = len([a for a in assets if a.get('asset_class') == 'stocks'])
-            macro_final = len([a for a in assets if a.get('asset_class') == 'macro'])
-            print(f"📊 Final market data: {len(assets)} assets (crypto: {crypto_final}, stocks: {stock_final}, macro: {macro_final})")
-            return assets
-        
+        """Real-time market summary WebSocket"""
         try:
-            # Handle messages
-            async def handle_messages():
-                try:
-                    async for message in websocket.iter_text():
-                        try:
-                            data = json.loads(message)
-                            if data.get('type') == 'set_filter':
-                                # Handle filter changes for future enhancement
-                                class_filter = data.get('class_filter', 'all')
-                        except json.JSONDecodeError:
-                            pass
-                except Exception:
-                    pass
+            await websocket.accept()
+            print(f"📊 Market summary WebSocket connected")
             
-            # Start message handler
-            message_task = asyncio.create_task(handle_messages())
-            
-            # Keep connection alive with periodic updates
-            ping_failures = 0
-            max_failures = 3
-            
+            count = 0
             while True:
-                try:
-                    if hasattr(websocket, 'client_state') and websocket.client_state.name == 'CONNECTED':
-                        # Use cached market data function for consistency
-                        assets = await get_cached_market_data()
-                        
-                        market_data = {
-                            "type": "market_summary_update",
-                            "assets": assets,
-                            "timestamp": datetime.now().isoformat(),
-                            "update_count": len(assets),
-                            "crypto_count": len([a for a in assets if a.get('asset_class') == 'crypto']),
-                            "stock_count": len([a for a in assets if a.get('asset_class') == 'stocks']),
-                            "macro_count": len([a for a in assets if a.get('asset_class') == 'macro']),
-                            "interval": 2
-                        }
-                        
-                        if not assets:
-                            market_data['assets'] = []
-                        
-                        await websocket.send_text(json.dumps(market_data))
-                        
-                        # Update connection state
-                        await manager.update_connection_state("market_summary", connection_id, last_ping=datetime.now())
-                        ping_failures = 0
-                    else:
-                        break
-                        
-                except Exception:
-                    ping_failures += 1
-                    if ping_failures >= max_failures:
-                        break
+                count += 1
+                await asyncio.sleep(2)
                 
-                await asyncio.sleep(0.2)  # Update every 200ms for real-time
+                # Get data from all services
+                assets = []
                 
-        except WebSocketDisconnect:
-            pass
-        except Exception:
-            pass
-        finally:
-            # Graceful cleanup
-            try:
-                if 'message_task' in locals():
-                    message_task.cancel()
-                await manager.safe_disconnect(websocket, "market_summary", connection_id)
-            except Exception:
-                pass
+                # Crypto data
+                if realtime_service and hasattr(realtime_service, 'price_cache'):
+                    for symbol in ['BTC', 'ETH', 'BNB', 'XRP', 'SOL']:
+                        if symbol in realtime_service.price_cache:
+                            price_data = realtime_service.price_cache[symbol]
+                            assets.append({
+                                'symbol': symbol,
+                                'name': multi_asset.get_asset_name(symbol),
+                                'current_price': price_data['current_price'],
+                                'change_24h': price_data['change_24h'],
+                                'volume': price_data['volume'],
+                                'asset_class': 'crypto'
+                            })
+                
+                # Stock data
+                if stock_realtime_service and hasattr(stock_realtime_service, 'price_cache'):
+                    for symbol in ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN']:
+                        if symbol in stock_realtime_service.price_cache:
+                            price_data = stock_realtime_service.price_cache[symbol]
+                            assets.append({
+                                'symbol': symbol,
+                                'name': stock_realtime_service.stock_symbols.get(symbol, symbol),
+                                'current_price': price_data['current_price'],
+                                'change_24h': price_data['change_24h'],
+                                'volume': price_data['volume'],
+                                'asset_class': 'stocks'
+                            })
+                
+                # Macro data
+                if macro_realtime_service and hasattr(macro_realtime_service, 'price_cache'):
+                    for symbol in ['GDP', 'CPI', 'UNEMPLOYMENT']:
+                        if symbol in macro_realtime_service.price_cache:
+                            price_data = macro_realtime_service.price_cache[symbol]
+                            assets.append({
+                                'symbol': symbol,
+                                'name': multi_asset.get_asset_name(symbol),
+                                'current_price': price_data['current_price'],
+                                'change_24h': price_data['change_24h'],
+                                'volume': price_data['volume'],
+                                'asset_class': 'macro'
+                            })
+                
+                market_data = {
+                    "type": "market_summary_update",
+                    "assets": assets,
+                    "timestamp": datetime.now().isoformat(),
+                    "update_count": count,
+                    "crypto_count": len([a for a in assets if a.get('asset_class') == 'crypto']),
+                    "stock_count": len([a for a in assets if a.get('asset_class') == 'stocks']),
+                    "macro_count": len([a for a in assets if a.get('asset_class') == 'macro'])
+                }
+                
+                await websocket.send_text(json.dumps(market_data))
+                
+                if count % 10 == 0:
+                    print(f"📊 Market update #{count}: {len(assets)} assets")
+                
+        except Exception as e:
+            print(f"❌ Market summary WebSocket error: {e}")
+
     
     @app.websocket("/ws/test")
     async def test_websocket(websocket: WebSocket):
