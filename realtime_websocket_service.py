@@ -33,37 +33,10 @@ class RealTimeWebSocketService:
             '1h': 60, '4H': 240, '1D': 1440, '1W': 10080
         }
         
-        # Initialize Redis for stream caching
-        self.redis_client = None
-        try:
-            import redis
-            import os
-            from dotenv import load_dotenv
-            load_dotenv()
-            
-            redis_host = os.getenv('REDIS_HOST', 'localhost')
-            redis_port = int(os.getenv('REDIS_PORT', '6379'))
-            redis_password = os.getenv('REDIS_PASSWORD', None) if os.getenv('REDIS_PASSWORD') else None
-            
-            self.redis_client = redis.Redis(
-                host=redis_host,
-                port=redis_port,
-                db=0,  # Use DB 0 for Railway compatibility
-                password=redis_password,
-                decode_responses=True,
-                socket_connect_timeout=10,
-                socket_timeout=10
-            )
-            
-            # Test connection
-            self.redis_client.ping()
-            test_key = "stream_test_key"
-            self.redis_client.setex(test_key, 5, "stream_test_value")
-            print(f"✅ Stream Redis connected: {redis_host}:{redis_port} (DB 0)")
-            
-        except Exception as e:
-            print(f"⚠️ Stream Redis failed: {e}")
-            self.redis_client = None
+        # Use centralized cache manager
+        from utils.cache_manager import CacheManager, CacheKeys
+        self.cache_manager = CacheManager
+        self.cache_keys = CacheKeys
     
     async def start_binance_streams(self):
         """Start Binance WebSocket streams for all symbols immediately"""
@@ -169,18 +142,10 @@ class RealTimeWebSocketService:
                             }
                             self.price_cache[symbol] = price_data
                             
-                            # Cache in Redis for external access
-                            if self.redis_client:
-                                try:
-                                    import json
-                                    cache_key = f"stream:{symbol}:price"
-                                    self.redis_client.setex(cache_key, 60, json.dumps(price_data, default=str))
-                                    print(f"📊 Cached {symbol}: ${current_price:.2f} ({change_24h:+.2f}%)")
-                                except Exception as e:
-                                    print(f"❌ Cache failed for {symbol}: {e}")
-                            else:
-                                # Ensure memory cache is always updated even without Redis
-                                print(f"📊 Memory cached {symbol}: ${current_price:.2f} ({change_24h:+.2f}%)")
+                            # Cache using centralized manager
+                            cache_key = self.cache_keys.price(symbol, 'crypto')
+                            self.cache_manager.set_cache(cache_key, price_data, ttl=30)
+                            print(f"📊 Cached {symbol}: ${current_price:.2f} ({change_24h:+.2f}%)")
 
                             
                             # Always store data for all timeframes (regardless of connections)

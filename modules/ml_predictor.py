@@ -90,46 +90,10 @@ class MobileMLModel:
             else:
                 raise Exception(f"Cannot start: {str(e)}")
         
-        # Initialize Redis for ML model caching with Railway compatibility
-        self.redis_client = None
-        try:
-            import redis
-            redis_host = os.getenv('REDIS_HOST', 'localhost')
-            redis_port = int(os.getenv('REDIS_PORT', '6379'))
-            redis_password = os.getenv('REDIS_PASSWORD', None) if os.getenv('REDIS_PASSWORD') else None
-            
-            print(f"🔄 ML Model connecting to Redis: {redis_host}:{redis_port}")
-            
-            # Railway Redis: Use DB 0 (default) for all caches
-            redis_db = 0
-            
-            self.redis_client = redis.Redis(
-                host=redis_host,
-                port=redis_port,
-                db=redis_db,
-                password=redis_password,
-                decode_responses=True,
-                socket_connect_timeout=10,
-                socket_timeout=10
-            )
-            
-            # Test connection and write capability
-            self.redis_client.ping()
-            
-            # Test ML cache functionality
-            test_key = "ml_test_key"
-            self.redis_client.setex(test_key, 5, "ml_test_value")
-            test_result = self.redis_client.get(test_key)
-            
-            if test_result == "ml_test_value":
-                print(f"✅ ML Redis connected and operational: {redis_host}:{redis_port} (DB {redis_db})")
-            else:
-                raise Exception("ML Redis read/write test failed")
-            
-        except Exception as e:
-            print(f"⚠️ ML Redis connection failed: {e}")
-            print("🔄 ML using memory cache fallback")
-            self.redis_client = None
+        # Use centralized cache manager
+        from utils.cache_manager import CacheManager, CacheKeys
+        self.cache_manager = CacheManager
+        self.cache_keys = CacheKeys
     
     def _download_model_from_drive(self, model_path):
         """Download model from Google Drive with virus scan bypass"""
@@ -172,17 +136,12 @@ class MobileMLModel:
         """Generate real model prediction with Redis caching"""
         import time
         current_time = time.time()
-        cache_key = f"ml:{symbol}:prediction"
+        cache_key = self.cache_keys.prediction(symbol)
         
-        # Check Redis cache first
-        if self.redis_client:
-            try:
-                cached_data = self.redis_client.get(cache_key)
-                if cached_data:
-                    import json
-                    return json.loads(cached_data)
-            except Exception as e:
-                pass
+        # Check cache using centralized manager
+        cached_data = self.cache_manager.get_cache(cache_key)
+        if cached_data:
+            return cached_data
         
         # Minimal rate limiting for real-time updates
         if symbol in self.last_request_time:
@@ -307,14 +266,9 @@ class MobileMLModel:
                 'data_source': data_source
             }
             
-            # Cache in Redis first with hot symbol priority
-            if self.redis_client:
-                try:
-                    import json
-                    ttl = 5 if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else 10
-                    self.redis_client.setex(cache_key, ttl, json.dumps(result))
-                except Exception as e:
-                    pass
+            # Cache using centralized manager with hot symbol priority
+            ttl = 5 if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else 10
+            self.cache_manager.set_cache(cache_key, result, ttl)
             
             # Cache the result in memory
             self.prediction_cache[symbol] = (current_time, result)

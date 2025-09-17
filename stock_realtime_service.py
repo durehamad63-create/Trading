@@ -42,29 +42,10 @@ class StockRealtimeService:
         self.last_update = {}
         self.session = None
         
-        # Initialize Redis for stock caching with Railway compatibility
-        self.redis_client = None
-        try:
-            import redis
-            self.redis_client = redis.Redis(
-                host=os.getenv('REDIS_HOST', 'localhost'),
-                port=int(os.getenv('REDIS_PORT', '6379')),
-                db=0,  # Use DB 0 for Railway compatibility
-                password=os.getenv('REDIS_PASSWORD', None) if os.getenv('REDIS_PASSWORD') else None,
-                decode_responses=True,
-                socket_connect_timeout=10,
-                socket_timeout=10
-            )
-            
-            # Test connection
-            self.redis_client.ping()
-            test_key = "stock_test_key"
-            self.redis_client.setex(test_key, 5, "stock_test_value")
-            print(f"✅ Stock Redis connected: {os.getenv('REDIS_HOST')}:{os.getenv('REDIS_PORT')} (DB 0)")
-            
-        except Exception as e:
-            print(f"⚠️ Stock Redis failed: {e}")
-            self.redis_client = None
+        # Use centralized cache manager
+        from utils.cache_manager import CacheManager, CacheKeys
+        self.cache_manager = CacheManager
+        self.cache_keys = CacheKeys
     
     async def start_stock_streams(self):
         """Start real-time data collection for all stocks"""
@@ -567,13 +548,8 @@ class StockRealtimeService:
             
             message_json = json.dumps(historical_message)
             
-            # Cache the message
-            if not hasattr(self, 'data_cache'):
-                self.data_cache = {}
-            self.data_cache[cache_key] = {
-                'data': message_json,
-                'timestamp': datetime.now()
-            }
+            # Cache using centralized manager
+            self.cache_manager.set_cache(cache_key, message_json, ttl=300)
             
             await websocket.send_text(message_json)
             

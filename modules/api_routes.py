@@ -60,46 +60,10 @@ def setup_routes(app: FastAPI, model, database=None):
     def get_cache_ttl(symbol):
         return 30 if symbol in HOT_SYMBOLS else cache_timeout
     
-    # Initialize Redis for distributed caching with Railway compatibility
-    redis_client = None
-    try:
-        import redis
-        redis_host = os.getenv('REDIS_HOST', 'localhost')
-        redis_port = int(os.getenv('REDIS_PORT', '6379'))
-        redis_password = os.getenv('REDIS_PASSWORD', None) if os.getenv('REDIS_PASSWORD') else None
-        
-        print(f"🔄 Connecting to Redis: {redis_host}:{redis_port}")
-        
-        # Railway Redis: Try DB 0 first (default), then fallback to no DB selection
-        redis_db = 0  # Railway typically uses DB 0
-        
-        redis_client = redis.Redis(
-            host=redis_host,
-            port=redis_port,
-            db=redis_db,
-            password=redis_password,
-            decode_responses=True,
-            socket_connect_timeout=10,
-            socket_timeout=10
-        )
-        
-        # Test connection
-        redis_client.ping()
-        
-        # Test set/get to ensure DB is writable
-        test_key = "api_test_key"
-        redis_client.setex(test_key, 5, "test_value")
-        test_result = redis_client.get(test_key)
-        
-        if test_result == "test_value":
-            print(f"✅ Redis connected and operational: {redis_host}:{redis_port} (DB {redis_db})")
-        else:
-            raise Exception("Redis read/write test failed")
-            
-    except Exception as e:
-        print(f"⚠️ Redis connection failed: {e}")
-        print("🔄 Using memory cache fallback")
-        redis_client = None
+    # Use centralized cache manager
+    from utils.cache_manager import CacheManager, CacheKeys
+    cache_manager = CacheManager
+    cache_keys = CacheKeys
     
     async def get_ml_prediction(symbol: str):
         """Get ML prediction data"""
@@ -164,16 +128,11 @@ def setup_routes(app: FastAPI, model, database=None):
         import asyncio
         
         async def get_prediction_fast(symbol):
-            # Check Redis cache first, then memory cache
-            if redis_client:
-                try:
-                    cache_key = f"prediction:{symbol}"
-                    cached_data = redis_client.get(cache_key)
-                    if cached_data:
-                        import json
-                        return json.loads(cached_data)
-                except Exception as e:
-                    pass
+            # Check cache using centralized manager
+            cache_key = cache_keys.prediction(symbol)
+            cached_data = cache_manager.get_cache(cache_key)
+            if cached_data:
+                return cached_data
             
             # Fallback to memory cache
             if symbol in prediction_cache:
@@ -189,14 +148,9 @@ def setup_routes(app: FastAPI, model, database=None):
                 prediction = await model.predict(symbol)
                 prediction['name'] = multi_asset.get_asset_name(symbol)
                 
-                # Cache in Redis first, then memory
-                if redis_client:
-                    try:
-                        import json
-                        cache_key = f"prediction:{symbol}"
-                        redis_client.setex(cache_key, cache_timeout, json.dumps(prediction))
-                    except Exception as e:
-                        pass
+                # Cache using centralized manager
+                cache_key = cache_keys.prediction(symbol)
+                cache_manager.set_cache(cache_key, prediction, cache_timeout)
                 
                 # Also cache in memory as fallback
                 prediction_cache[symbol] = {
@@ -1251,17 +1205,13 @@ def setup_routes(app: FastAPI, model, database=None):
         current_filter = 'all'
         
         async def get_cached_market_data():
-            """Get market data from Redis cache or generate if not cached"""
-            cache_key = "market_summary:all"
+            """Get market data from cache or generate if not cached"""
+            cache_key = cache_keys.market_summary("all")
             
-            # Try Redis cache first
-            if redis_client:
-                try:
-                    cached_data = redis_client.get(cache_key)
-                    if cached_data:
-                        return json.loads(cached_data)
-                except Exception as e:
-                    pass
+            # Try cache first
+            cached_data = cache_manager.get_cache(cache_key)
+            if cached_data:
+                return cached_data
             
             # Define symbol lists for proper classification
             crypto_symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX']
