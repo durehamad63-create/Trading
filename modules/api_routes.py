@@ -105,13 +105,15 @@ def setup_routes(app: FastAPI, model, database=None):
         await rate_limiter.check_rate_limit(request)
     
     @app.get("/api/market/summary")
-    async def market_summary(class_filter: str = "crypto", limit: int = 10, request: Request = None):
+    async def market_summary(request: Request = None, limit: int = 10, class_filter: str = "crypto"):
         if request:
             await rate_limiter.check_rate_limit(request)
         """Get market summary with real predictions for crypto, stocks, and macro"""
         
         try:
-            print(f"🔍 MARKET SUMMARY REQUEST: class_filter='{class_filter}', limit={limit}")
+            # Get class parameter from query string to avoid Python keyword conflict
+            class_param = request.query_params.get('class', 'crypto') if request else 'crypto'
+            print(f"🔍 MARKET SUMMARY REQUEST: class='{class_param}', limit={limit}")
             crypto_symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX']
             stock_symbols = ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM']
             macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
@@ -158,7 +160,7 @@ def setup_routes(app: FastAPI, model, database=None):
             
             # Get data based on class filter
             
-            if class_filter == "crypto":
+            if class_param == "crypto":
                 print(f"🔍 CRYPTO FILTER - Processing {len(crypto_symbols[:limit])} symbols")
                 for symbol in crypto_symbols[:limit]:
                     cache_key = cache_keys.price(symbol, 'crypto')
@@ -184,7 +186,7 @@ def setup_routes(app: FastAPI, model, database=None):
                         })
                 print(f"🔍 CRYPTO RESULT: {len(assets)} assets added")
             
-            elif class_filter == "stocks":
+            elif class_param == "stocks":
                 print(f"🔍 STOCK FILTER - Processing {len(stock_symbols[:limit])} symbols")
                 for symbol in stock_symbols[:limit]:
                     cache_key = cache_keys.price(symbol, 'stock')
@@ -210,7 +212,7 @@ def setup_routes(app: FastAPI, model, database=None):
                         })
                 print(f"🔍 STOCK RESULT: {len(assets)} assets added")
             
-            elif class_filter == "macro":
+            elif class_param == "macro":
                 print(f"🔍 MACRO FILTER - Service available: {macro_realtime_service is not None}")
                 if macro_realtime_service:
                     print(f"🔍 MACRO CACHE - Size: {len(macro_realtime_service.price_cache) if hasattr(macro_realtime_service, 'price_cache') else 0}")
