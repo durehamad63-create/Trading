@@ -45,11 +45,23 @@ class MobileMLModel:
             import yfinance as yf
             import requests
             
-
-            
             # Use new specialized model
             model_path = os.path.join('models', 'specialized_trading_model.pkl')
+            
+            # Download model from Google Drive if not exists locally
+            if not os.path.exists(model_path):
+                self._download_model_from_drive(model_path)
+            
+            # Verify model file exists and is valid
+            if not os.path.exists(model_path):
+                raise Exception(f"Model file not found: {model_path}")
+            
+            file_size = os.path.getsize(model_path)
+            if file_size < 1000:
+                raise Exception(f"Model file too small ({file_size} bytes), download may have failed")
+            
             self.mobile_model = joblib.load(model_path)
+            print(f"Model loaded successfully from {model_path} ({file_size} bytes)")
             pass
             
             # Extract XGBoost model for compatibility
@@ -61,8 +73,22 @@ class MobileMLModel:
             else:
                 raise Exception("Specialized model structure not found")
         except Exception as e:
-            print(f"Model loading failed: {e}")
-            raise Exception(f"Cannot start: {e}")
+            print(f"Model loading failed: {str(e)}")
+            if "timeout" in str(e).lower() or "60" in str(e):
+                print("Timeout detected - trying gdown alternative...")
+                try:
+                    import subprocess
+                    import sys
+                    subprocess.run([sys.executable, "-m", "pip", "install", "gdown"], check=True, capture_output=True)
+                    import gdown
+                    file_id = "10uBJLKsijJHDFBOhCsyFFi-1DAhamjez"
+                    gdown.download(f"https://drive.google.com/uc?id={file_id}", model_path, quiet=False, fuzzy=True)
+                    self.mobile_model = joblib.load(model_path)
+                    print("Model loaded successfully using gdown")
+                except Exception as alt_error:
+                    raise Exception(f"Cannot start: Both download methods failed - {str(e)}")
+            else:
+                raise Exception(f"Cannot start: {str(e)}")
         
         # Initialize Redis for ML model caching
         self.redis_client = None
@@ -82,6 +108,43 @@ class MobileMLModel:
         except Exception as e:
             pass
             self.redis_client = None
+    
+    def _download_model_from_drive(self, model_path):
+        """Download model from Google Drive with virus scan bypass"""
+        try:
+            file_id = "10uBJLKsijJHDFBOhCsyFFi-1DAhamjez"
+            
+            # Create models directory if it doesn't exist
+            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+            
+            print(f"Downloading model from Google Drive...")
+            
+            # Use direct download URL with confirmation for large files
+            download_url = f"https://drive.usercontent.google.com/download?id={file_id}&confirm=t"
+            
+            session = requests.Session()
+            response = session.get(download_url, stream=True, timeout=300, allow_redirects=True)
+            response.raise_for_status()
+            
+            # Check if we got HTML (virus scan page) instead of binary data
+            content_type = response.headers.get('content-type', '')
+            if 'text/html' in content_type:
+                raise Exception("Got HTML page instead of file - virus scan blocking download")
+            
+            with open(model_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            
+            print(f"Model downloaded successfully to {model_path}")
+            
+            # Verify file size
+            file_size = os.path.getsize(model_path)
+            if file_size < 1000000:  # Less than 1MB indicates error (model should be ~161MB)
+                raise Exception(f"Downloaded file too small ({file_size} bytes), expected ~161MB")
+            
+        except Exception as e:
+            raise Exception(f"Failed to download model from Google Drive: {str(e)}")
     
     async def predict(self, symbol):
         """Generate real model prediction with Redis caching"""

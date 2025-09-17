@@ -67,14 +67,7 @@ class MacroRealtimeService:
                         'unit': config['unit']
                     }
                     
-                    # Log macro updates
-                    unit = config['unit']
-                    if unit == 'B':
-                        print(f"📊 Macro: {symbol} = ${new_value:.0f}B ({change_pct:+.3f}%)")
-                    elif unit == '%':
-                        print(f"📊 Macro: {symbol} = {new_value:.2f}% ({change_pct:+.3f}%)")
-                    else:
-                        print(f"📊 Macro: {symbol} = {new_value:.1f} ({change_pct:+.3f}%)")
+                    # Macro updates (logging removed)
                     
                     # Store data for all timeframes if connections exist
                     if symbol in self.active_connections and self.active_connections[symbol]:
