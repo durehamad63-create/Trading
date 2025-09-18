@@ -209,6 +209,25 @@ class GapFillingService:
             print(f"❌ Error storing batch for {timeframe_symbol}: {e}")
 
 # Global gap filling service
+gap_filler = GapFillingService()           if self.model:
+                        try:
+                            symbol = timeframe_symbol.split('_')[0]
+                            prediction = await self.model.predict(symbol)
+                            
+                            await conn.execute("""
+                                INSERT INTO forecasts (symbol, forecast_direction, confidence, predicted_price, predicted_range, created_at)
+                                VALUES ($1, $2, $3, $4, $5, $6)
+                                ON CONFLICT DO NOTHING
+                            """, timeframe_symbol, prediction.get('forecast_direction', 'HOLD'),
+                                prediction.get('confidence', 75), prediction.get('predicted_price', data_point['current_price']),
+                                prediction.get('predicted_range', 'N/A'), data_point['timestamp'])
+                        except Exception:
+                            pass
+                            
+        except Exception as e:
+            print(f"❌ Error storing batch for {timeframe_symbol}: {e}")
+
+# Global gap filling service
 gap_filler = GapFillingService()
                     if self.model:
                         try:
