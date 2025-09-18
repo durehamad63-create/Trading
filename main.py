@@ -24,8 +24,8 @@ from modules.api_routes import setup_routes
 # Initialize database immediately
 print("🔄 Connecting to database...")
 try:
-    from utils.database_manager import DatabaseManager
-    db = DatabaseManager.get_instance()
+    from database import TradingDatabase
+    db = TradingDatabase()
     print("✅ Database instance created")
 except Exception as e:
     print(f"❌ Database failed: {e}")
@@ -35,7 +35,7 @@ async def init_database():
     global db
     if db:
         try:
-            await DatabaseManager.initialize()
+            await db.connect()
             print("✅ Database connected")
         except Exception as e:
             print(f"⚠️ Database connection failed: {e}")
@@ -121,14 +121,18 @@ async def lifespan(app: FastAPI):
     async def setup_database():
         try:
             await init_database()
-            print("🔄 Starting gap filling...")
-            # Start gap filling after database is ready
-            from gap_filling_service import GapFillingService
-            gap_filler = GapFillingService(model)
-            await gap_filler.fill_missing_data(db)
-            print("✅ Gap filling completed")
+            # Only start gap filling if database is actually connected
+            if db and db.pool:
+                print("🔄 Starting gap filling...")
+                from gap_filling_service import GapFillingService
+                gap_filler = GapFillingService(model)
+                await gap_filler.fill_missing_data(db)
+                print("✅ Gap filling completed")
+            else:
+                print("⚠️ Skipping gap filling - no database connection")
         except Exception as e:
             print(f"⚠️ Database setup failed: {e}")
+            print("⚠️ Skipping gap filling due to database error")
     
     # Initialize database in background (model already loaded)
     background_tasks.append(asyncio.create_task(setup_database()))

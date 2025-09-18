@@ -260,22 +260,48 @@ class MacroRealtimeService:
                     print(f"❌ Macro database fallback failed: {e}")
                     return
             
-            print(f"📊 Macro DB Query: {symbol} for timeframe {timeframe}")
-            chart_data = await db.get_chart_data(symbol, timeframe)
-            print(f"📊 Macro DB Result: {len(chart_data.get('actual', []))} actual, {len(chart_data.get('forecast', []))} forecast")
+            # Try multiple database query formats for macro historical data
+            chart_data = None
+            actual_data = []
+            forecast_data = []
+            timestamps = []
             
-            if chart_data['actual'] and chart_data['forecast']:
-                # Ensure proper data alignment
-                min_length = min(len(chart_data['actual']), len(chart_data['forecast']), len(chart_data['timestamps']))
-                points = min(50, min_length)
-                
-                actual_data = [float(x) for x in chart_data['actual'][-points:]]
-                forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
-                timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
-                
-                print(f"📊 Macro historical data for {symbol}: {len(actual_data)} actual, {len(forecast_data)} forecast")
-            else:
-                print(f"❌ No macro database data for {symbol} - not sending fake data")
+            # Query attempts with different symbol formats (macro uses 1W, 1M timeframes)
+            query_attempts = [
+                f"{symbol}_{timeframe}",  # GDP_1W
+                f"{symbol}_1W",  # GDP_1W (default macro timeframe)
+                f"{symbol}_1M",  # GDP_1M (monthly macro)
+                symbol  # GDP (fallback)
+            ]
+            
+            for attempt, query_symbol in enumerate(query_attempts):
+                print(f"📊 Macro DB Query attempt {attempt+1}: {query_symbol}")
+                try:
+                    chart_data = await db.get_chart_data(query_symbol, timeframe)
+                    if chart_data and chart_data.get('actual') and chart_data.get('forecast'):
+                        print(f"✅ Found macro data: {len(chart_data['actual'])} actual, {len(chart_data['forecast'])} forecast")
+                        
+                        # Process successful data
+                        min_length = min(len(chart_data['actual']), len(chart_data['forecast']), len(chart_data['timestamps']))
+                        points = min(50, min_length)
+                        
+                        actual_data = [float(x) for x in chart_data['actual'][-points:]]
+                        forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
+                        timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
+                        break
+                except Exception as e:
+                    print(f"❌ Macro query {attempt+1} failed: {e}")
+                    continue
+            
+            # If no data found, return error
+            if not actual_data or not forecast_data:
+                print(f"❌ No macro historical data found for {symbol} after all attempts")
+                error_data = {
+                    "type": "error",
+                    "symbol": symbol,
+                    "message": "No macro historical data available"
+                }
+                await websocket.send_text(json.dumps(error_data))
                 return
             
             # Get indicator name

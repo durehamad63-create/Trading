@@ -6,7 +6,7 @@ import asyncio
 import aiohttp
 import logging
 from datetime import datetime, timedelta
-from database import db
+# Database will be passed as parameter
 from config.symbols import CRYPTO_SYMBOLS
 from utils.error_handler import ErrorHandler
 
@@ -190,6 +190,26 @@ class GapFillingService:
                         data_point['change_24h'], data_point['volume'], data_point['timestamp'])
                     
                     # Generate and store forecast
+                    if self.model:
+                        try:
+                            symbol = timeframe_symbol.split('_')[0]
+                            prediction = await self.model.predict(symbol)
+                            
+                            await conn.execute("""
+                                INSERT INTO forecasts (symbol, forecast_direction, confidence, predicted_price, predicted_range, created_at)
+                                VALUES ($1, $2, $3, $4, $5, $6)
+                                ON CONFLICT DO NOTHING
+                            """, timeframe_symbol, prediction.get('forecast_direction', 'HOLD'),
+                                prediction.get('confidence', 75), prediction.get('predicted_price', data_point['current_price']),
+                                prediction.get('predicted_range', 'N/A'), data_point['timestamp'])
+                        except Exception:
+                            pass
+                            
+        except Exception as e:
+            print(f"❌ Error storing batch for {timeframe_symbol}: {e}")
+
+# Global gap filling service
+gap_filler = GapFillingService()
                     if self.model:
                         try:
                             symbol = timeframe_symbol.split('_')[0]

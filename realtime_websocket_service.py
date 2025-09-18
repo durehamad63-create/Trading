@@ -522,47 +522,48 @@ class RealTimeWebSocketService:
                     print(f"❌ Database fallback failed: {e}")
                     return
             
-            # Get historical chart data from database with normalized timeframe
-            normalized_tf = '4H' if timeframe.lower() == '4h' else timeframe
-            query_symbol = f"{symbol}_{normalized_tf}"
-            print(f"📊 DB Query: {query_symbol} for timeframe {normalized_tf}")
-            chart_data = await db.get_chart_data(query_symbol, normalized_tf)
-            print(f"📊 DB Result: {len(chart_data.get('actual', []))} actual, {len(chart_data.get('forecast', []))} forecast")
+            # Try multiple database query formats for historical data
+            chart_data = None
+            actual_data = []
+            forecast_data = []
+            timestamps = []
             
-            if chart_data['actual'] and chart_data['forecast']:
-                # Use database data with proper alignment
-                points = min(50, len(chart_data['actual']), len(chart_data['forecast']))
-                actual_data = [float(x) for x in chart_data['actual'][-points:]]
-                forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
-                timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
-                
-                # Ensure arrays are same length
-                min_length = min(len(actual_data), len(forecast_data), len(timestamps))
-                actual_data = actual_data[-min_length:]
-                forecast_data = forecast_data[-min_length:]
-                timestamps = timestamps[-min_length:]
-                
-                print(f"📊 Historical data for {symbol}: {len(actual_data)} actual, {len(forecast_data)} forecast, {len(timestamps)} timestamps", flush=True)
-            else:
-                # Force database query with timeframe-specific symbol
-                timeframe_symbol = f"{symbol}_{timeframe}" if timeframe in ['1m', '5m', '15m', '1h', '4h', '1D', '1W'] else symbol
-                print(f"📊 DB Fallback Query: {timeframe_symbol} for timeframe {timeframe}")
-                chart_data = await db.get_chart_data(timeframe_symbol, timeframe)
-                print(f"📊 DB Fallback Result: {len(chart_data.get('actual', []))} actual, {len(chart_data.get('forecast', []))} forecast")
-                
-                if chart_data['actual'] and chart_data['forecast']:
-                    # Ensure proper data alignment
-                    min_length = min(len(chart_data['actual']), len(chart_data['forecast']), len(chart_data['timestamps']))
-                    points = min(50, min_length)
-                    
-                    actual_data = [float(x) for x in chart_data['actual'][-points:]]
-                    forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
-                    timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
-                    
-                    print(f"📊 Fallback data for {symbol}: {len(actual_data)} actual, {len(forecast_data)} forecast", flush=True)
-                else:
-                    print(f"❌ No database data for {symbol}_{timeframe} - not sending fake data", flush=True)
-                    return
+            # Query attempts with different symbol formats
+            query_attempts = [
+                f"{symbol}_{'4H' if timeframe.lower() == '4h' else timeframe}",  # BTC_4H
+                f"{symbol}_{timeframe}",  # BTC_4h
+                symbol  # BTC (fallback)
+            ]
+            
+            for attempt, query_symbol in enumerate(query_attempts):
+                print(f"📊 DB Query attempt {attempt+1}: {query_symbol}")
+                try:
+                    chart_data = await db.get_chart_data(query_symbol, timeframe)
+                    if chart_data and chart_data.get('actual') and chart_data.get('forecast'):
+                        print(f"✅ Found data: {len(chart_data['actual'])} actual, {len(chart_data['forecast'])} forecast")
+                        
+                        # Process successful data
+                        min_length = min(len(chart_data['actual']), len(chart_data['forecast']), len(chart_data['timestamps']))
+                        points = min(50, min_length)
+                        
+                        actual_data = [float(x) for x in chart_data['actual'][-points:]]
+                        forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
+                        timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
+                        break
+                except Exception as e:
+                    print(f"❌ Query {attempt+1} failed: {e}")
+                    continue
+            
+            # If no data found, return error
+            if not actual_data or not forecast_data:
+                print(f"❌ No historical data found for {symbol} after all attempts")
+                error_data = {
+                    "type": "error",
+                    "symbol": symbol,
+                    "message": "No historical data available"
+                }
+                await websocket.send_text(json.dumps(error_data))
+                return
             
             historical_message = {
                 "type": "historical_data",

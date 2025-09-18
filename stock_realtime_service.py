@@ -524,22 +524,47 @@ class StockRealtimeService:
                 except Exception:
                     return
                 
-            print(f"📊 Stock DB Query: {symbol} for timeframe {timeframe}")
-            chart_data = await db.get_chart_data(symbol, timeframe)
-            print(f"📊 Stock DB Result: {len(chart_data.get('actual', []))} actual, {len(chart_data.get('forecast', []))} forecast")
+            # Try multiple database query formats for stock historical data
+            chart_data = None
+            actual_data = []
+            forecast_data = []
+            timestamps = []
             
-            if chart_data['actual'] and chart_data['forecast']:
-                # Ensure proper data alignment
-                min_length = min(len(chart_data['actual']), len(chart_data['forecast']), len(chart_data['timestamps']))
-                points = min(50, min_length)
-                
-                actual_data = [float(x) for x in chart_data['actual'][-points:]]
-                forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
-                timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
-                
-                print(f"📊 Stock historical data for {symbol}: {len(actual_data)} actual, {len(forecast_data)} forecast")
-            else:
-                print(f"❌ No stock database data for {symbol} - not sending fake data")
+            # Query attempts with different symbol formats
+            query_attempts = [
+                f"{symbol}_{'4H' if timeframe.lower() == '4h' else timeframe}",  # NVDA_4H
+                f"{symbol}_{timeframe}",  # NVDA_4h
+                symbol  # NVDA (fallback)
+            ]
+            
+            for attempt, query_symbol in enumerate(query_attempts):
+                print(f"📊 Stock DB Query attempt {attempt+1}: {query_symbol}")
+                try:
+                    chart_data = await db.get_chart_data(query_symbol, timeframe)
+                    if chart_data and chart_data.get('actual') and chart_data.get('forecast'):
+                        print(f"✅ Found stock data: {len(chart_data['actual'])} actual, {len(chart_data['forecast'])} forecast")
+                        
+                        # Process successful data
+                        min_length = min(len(chart_data['actual']), len(chart_data['forecast']), len(chart_data['timestamps']))
+                        points = min(50, min_length)
+                        
+                        actual_data = [float(x) for x in chart_data['actual'][-points:]]
+                        forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
+                        timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
+                        break
+                except Exception as e:
+                    print(f"❌ Stock query {attempt+1} failed: {e}")
+                    continue
+            
+            # If no data found, return error
+            if not actual_data or not forecast_data:
+                print(f"❌ No stock historical data found for {symbol} after all attempts")
+                error_data = {
+                    "type": "error",
+                    "symbol": symbol,
+                    "message": "No stock historical data available"
+                }
+                await websocket.send_text(json.dumps(error_data))
                 return
             
             historical_message = {
