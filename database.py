@@ -267,14 +267,15 @@ class TradingDatabase:
         if not self.pool:
             return {'forecast': [], 'actual': [], 'timestamps': []}
         
+        # Standardize timeframe format first
+        timeframe_map = {'5m': '5m', '15m': '15m', '30m': '30m', '1h': '1h', '4h': '4H', '4H': '4H', '1D': '1D', '1W': '1W'}
+        normalized_tf = timeframe_map.get(timeframe, timeframe)
+        
         # Use symbol as-is if it already contains timeframe
         if '_' in symbol:
             db_symbol = symbol  # Already has timeframe (e.g., BTC_4H)
         else:
-            # Add timeframe suffix for base symbols
-            timeframe_map = {'5m': '5m', '15m': '15m', '30m': '30m', '1h': '1h', '4h': '4H', '4H': '4H', '1D': '1D', '1W': '1W'}
-            db_timeframe = timeframe_map.get(timeframe, timeframe)
-            db_symbol = f"{symbol}_{db_timeframe}"
+            db_symbol = f"{symbol}_{normalized_tf}"
         
         # Enhanced Redis cache with multiple TTLs
         cache_key = f"chart_data:{symbol}:{timeframe}"

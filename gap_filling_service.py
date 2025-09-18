@@ -59,7 +59,9 @@ class GapFillingService:
     
     async def _ensure_month_data(self, symbol, timeframe):
         """Ensure at least 1 month of data exists for symbol_timeframe"""
-        timeframe_symbol = f"{symbol}_{timeframe}"
+        # Standardize timeframe format
+        normalized_tf = '4H' if timeframe.lower() == '4h' else timeframe
+        timeframe_symbol = f"{symbol}_{normalized_tf}"
         
         # Check existing data count
         try:
@@ -121,7 +123,11 @@ class GapFillingService:
                 
                 data_point = {
                     'current_price': price,
-                    'change_24h': (i % 10 - 5) * 0.1,  # Random change between -0.5% and +0.5%
+                    'open_price': price * 0.999,
+                    'high': price * 1.001,
+                    'low': price * 0.998,
+                    'close_price': price,
+                    'change_24h': (i % 10 - 5) * 0.1,
                     'volume': 1000000 + (i % 1000) * 1000,
                     'timestamp': timestamp
                 }
@@ -167,15 +173,21 @@ class GapFillingService:
     async def _store_batch_data(self, timeframe_symbol, data_points, timeframe):
         """Store batch of data points with forecasts"""
         try:
+            # Extract timeframe from symbol if not provided
+            if not timeframe and '_' in timeframe_symbol:
+                timeframe = timeframe_symbol.split('_')[-1]
+            
             async with self.db.pool.acquire() as conn:
                 for data_point in data_points:
-                    # Store actual price
+                    # Store actual price with proper OHLC fields
                     await conn.execute("""
-                        INSERT INTO actual_prices (symbol, price, change_24h, volume, timestamp)
-                        VALUES ($1, $2, $3, $4, $5)
+                        INSERT INTO actual_prices (symbol, timeframe, open_price, high, low, close_price, price, change_24h, volume, timestamp)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                         ON CONFLICT (symbol, timestamp) DO NOTHING
-                    """, timeframe_symbol, data_point['current_price'], data_point['change_24h'],
-                        data_point['volume'], data_point['timestamp'])
+                    """, timeframe_symbol, timeframe, data_point.get('open_price', data_point['current_price']),
+                        data_point.get('high', data_point['current_price']), data_point.get('low', data_point['current_price']),
+                        data_point.get('close_price', data_point['current_price']), data_point['current_price'], 
+                        data_point['change_24h'], data_point['volume'], data_point['timestamp'])
                     
                     # Generate and store forecast
                     if self.model:
