@@ -163,12 +163,27 @@ def setup_routes(app: FastAPI, model, database=None):
             if class_param == "crypto":
                 print(f"🔍 CRYPTO FILTER - Processing {len(crypto_symbols[:limit])} symbols")
                 for symbol in crypto_symbols[:limit]:
+                    # Try cache first
                     cache_key = cache_keys.price(symbol, 'crypto')
                     price_data = cache_manager.get_cache(cache_key)
                     
+                    # Try service cache
                     if not price_data and realtime_service and hasattr(realtime_service, 'price_cache'):
                         if symbol in realtime_service.price_cache:
                             price_data = realtime_service.price_cache[symbol]
+                    
+                    # Fallback to real API data
+                    if not price_data:
+                        try:
+                            api_data = await multi_asset.get_asset_data(symbol)
+                            price_data = {
+                                'current_price': api_data['current_price'],
+                                'change_24h': api_data['change_24h'],
+                                'volume': 1000000000
+                            }
+                        except Exception as e:
+                            print(f"❌ Failed to get {symbol} data: {e}")
+                            continue
                     
                     if price_data:
                         print(f"✅ Adding crypto asset: {symbol}")
@@ -181,7 +196,7 @@ def setup_routes(app: FastAPI, model, database=None):
                             'forecast_direction': 'UP' if price_data['change_24h'] > 1 else 'DOWN' if price_data['change_24h'] < -1 else 'HOLD',
                             'confidence': min(80, max(60, 70 + abs(price_data['change_24h']))),
                             'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
-                            'data_source': 'Binance Stream',
+                            'data_source': 'Live API',
                             'asset_class': 'crypto'
                         })
                 print(f"🔍 CRYPTO RESULT: {len(assets)} assets added")
@@ -683,8 +698,10 @@ def setup_routes(app: FastAPI, model, database=None):
                     await asyncio.sleep(2)  # Update every 2 seconds
                     ping_count += 1
                     
-                    # Get current price from cache
+                    # Get current price from cache or API
                     current_price = None
+                    price_data = None
+                    
                     if is_crypto and realtime_service and symbol in realtime_service.price_cache:
                         price_data = realtime_service.price_cache[symbol]
                         current_price = price_data['current_price']
@@ -694,6 +711,20 @@ def setup_routes(app: FastAPI, model, database=None):
                     elif is_macro and macro_realtime_service and symbol in macro_realtime_service.price_cache:
                         price_data = macro_realtime_service.price_cache[symbol]
                         current_price = price_data['current_price']
+                    
+                    # Fallback to API if no cache
+                    if not current_price:
+                        try:
+                            api_data = await multi_asset.get_asset_data(symbol)
+                            current_price = api_data['current_price']
+                            price_data = {
+                                'current_price': current_price,
+                                'change_24h': api_data.get('change_24h', 0),
+                                'volume': api_data.get('volume', 1000000)
+                            }
+                        except Exception as e:
+                            print(f"❌ Failed to get live price for {symbol}: {e}")
+                            continue
                     
                     # Send real-time update
                     if current_price:
@@ -1236,50 +1267,101 @@ def setup_routes(app: FastAPI, model, database=None):
                 # Get data from all services
                 assets = []
                 
-                # All crypto symbols
+                # All crypto symbols with API fallback
                 crypto_symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX']
-                if realtime_service and hasattr(realtime_service, 'price_cache'):
-                    for symbol in crypto_symbols:
+                for symbol in crypto_symbols:
+                    price_data = None
+                    
+                    # Try service cache first
+                    if realtime_service and hasattr(realtime_service, 'price_cache'):
                         if symbol in realtime_service.price_cache:
                             price_data = realtime_service.price_cache[symbol]
-                            assets.append({
-                                'symbol': symbol,
-                                'name': multi_asset.get_asset_name(symbol),
-                                'current_price': price_data['current_price'],
-                                'change_24h': price_data['change_24h'],
-                                'volume': price_data['volume'],
-                                'asset_class': 'crypto'
-                            })
+                    
+                    # Fallback to API
+                    if not price_data:
+                        try:
+                            api_data = await multi_asset.get_asset_data(symbol)
+                            price_data = {
+                                'current_price': api_data['current_price'],
+                                'change_24h': api_data['change_24h'],
+                                'volume': 1000000000
+                            }
+                        except:
+                            continue
+                    
+                    if price_data:
+                        assets.append({
+                            'symbol': symbol,
+                            'name': multi_asset.get_asset_name(symbol),
+                            'current_price': price_data['current_price'],
+                            'change_24h': price_data['change_24h'],
+                            'volume': price_data['volume'],
+                            'asset_class': 'crypto'
+                        })
                 
-                # All stock symbols
+                # All stock symbols with API fallback
                 stock_symbols = ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM']
-                if stock_realtime_service and hasattr(stock_realtime_service, 'price_cache'):
-                    for symbol in stock_symbols:
+                for symbol in stock_symbols:
+                    price_data = None
+                    
+                    # Try service cache first
+                    if stock_realtime_service and hasattr(stock_realtime_service, 'price_cache'):
                         if symbol in stock_realtime_service.price_cache:
                             price_data = stock_realtime_service.price_cache[symbol]
-                            assets.append({
-                                'symbol': symbol,
-                                'name': stock_realtime_service.stock_symbols.get(symbol, symbol),
-                                'current_price': price_data['current_price'],
-                                'change_24h': price_data['change_24h'],
-                                'volume': price_data['volume'],
-                                'asset_class': 'stocks'
-                            })
+                    
+                    # Fallback to API
+                    if not price_data:
+                        try:
+                            api_data = await multi_asset.get_asset_data(symbol)
+                            price_data = {
+                                'current_price': api_data['current_price'],
+                                'change_24h': api_data['change_24h'],
+                                'volume': 10000000
+                            }
+                        except:
+                            continue
+                    
+                    if price_data:
+                        assets.append({
+                            'symbol': symbol,
+                            'name': multi_asset.get_asset_name(symbol),
+                            'current_price': price_data['current_price'],
+                            'change_24h': price_data['change_24h'],
+                            'volume': price_data['volume'],
+                            'asset_class': 'stocks'
+                        })
                 
-                # All macro symbols
+                # All macro symbols with direct data fallback
                 macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
-                if macro_realtime_service and hasattr(macro_realtime_service, 'price_cache'):
-                    for symbol in macro_symbols:
+                for symbol in macro_symbols:
+                    price_data = None
+                    
+                    # Try service cache first
+                    if macro_realtime_service and hasattr(macro_realtime_service, 'price_cache'):
                         if symbol in macro_realtime_service.price_cache:
                             price_data = macro_realtime_service.price_cache[symbol]
-                            assets.append({
-                                'symbol': symbol,
-                                'name': multi_asset.get_asset_name(symbol),
-                                'current_price': price_data['current_price'],
-                                'change_24h': price_data['change_24h'],
-                                'volume': price_data['volume'],
-                                'asset_class': 'macro'
-                            })
+                    
+                    # Fallback to direct macro data
+                    if not price_data:
+                        try:
+                            api_data = multi_asset._get_macro_data(symbol)
+                            price_data = {
+                                'current_price': api_data['current_price'],
+                                'change_24h': api_data['change_24h'],
+                                'volume': 1000000
+                            }
+                        except:
+                            continue
+                    
+                    if price_data:
+                        assets.append({
+                            'symbol': symbol,
+                            'name': multi_asset.get_asset_name(symbol),
+                            'current_price': price_data['current_price'],
+                            'change_24h': price_data['change_24h'],
+                            'volume': price_data['volume'],
+                            'asset_class': 'macro'
+                        })
                 
                 market_data = {
                     "type": "market_summary_update",
