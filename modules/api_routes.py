@@ -1525,6 +1525,7 @@ def setup_routes(app: FastAPI, model, database=None):
         # Get timeframe data points configuration
         timeframe_config = {
             '1h': {'past': 24, 'future': 12},
+            '1H': {'past': 24, 'future': 12},  # Support both formats
             '4H': {'past': 24, 'future': 6}, 
             '1D': {'past': 30, 'future': 7},
             '7D': {'past': 20, 'future': 5},
@@ -1566,12 +1567,19 @@ def setup_routes(app: FastAPI, model, database=None):
                 # Get real historical data from database for all timeframes
                 if db and db.pool:
                     try:
-                        symbol_tf = f"{symbol}_{timeframe}"
+                        # Try both timeframe formats (1h and 1H)
+                        symbol_tf_formats = [f"{symbol}_{timeframe}", f"{symbol}_{timeframe.lower()}"]
+                        historical_data = None
+                        
                         async with db.pool.acquire() as conn:
-                            historical_data = await conn.fetch(
-                                "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT $2",
-                                symbol_tf, config['past']
-                            )
+                            for symbol_tf in symbol_tf_formats:
+                                historical_data = await conn.fetch(
+                                    "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT $2",
+                                    symbol_tf, config['past']
+                                )
+                                if historical_data:
+                                    print(f"📊 Found data for {symbol_tf}")
+                                    break
                             
                             if historical_data:
                                 for record in reversed(historical_data):
@@ -1579,7 +1587,7 @@ def setup_routes(app: FastAPI, model, database=None):
                                     past_timestamps.append(record['timestamp'].isoformat())
                                 print(f"📊 Using {len(past_prices)} real data points for {symbol}_{timeframe}")
                             else:
-                                print(f"❌ No database data found for {symbol}_{timeframe}")
+                                print(f"❌ No database data found for {symbol}_{timeframe} or {symbol}_{timeframe.lower()}")
                     except Exception as e:
                         print(f"❌ Database error for {symbol}_{timeframe}: {e}")
                 
@@ -1594,7 +1602,7 @@ def setup_routes(app: FastAPI, model, database=None):
                 
                 base_time = datetime.now()
                 for i in range(config['future']):
-                    if timeframe == '1h':
+                    if timeframe in ['1h', '1H']:
                         time_offset = timedelta(hours=i + 1)
                         timestamp = (base_time + time_offset).replace(minute=0, second=0, microsecond=0)
                     elif timeframe == '4H':
