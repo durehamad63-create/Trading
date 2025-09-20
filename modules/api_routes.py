@@ -353,30 +353,32 @@ def setup_routes(app: FastAPI, model, database=None):
             accuracy = base_accuracy + confidence_factor - volatility_factor + time_factor
             accuracy = min(92, max(65, accuracy))
             
+            today = datetime.now()
             return {
                 'symbol': symbol,
                 'overall_accuracy': round(accuracy, 1),
                 'accuracy_history': [
-                    {'date': '2024-01-15', 'accuracy': round(accuracy + 2, 1)},
-                    {'date': '2024-01-14', 'accuracy': round(accuracy - 1, 1)},
-                    {'date': '2024-01-13', 'accuracy': round(accuracy + 1, 1)},
-                    {'date': '2024-01-12', 'accuracy': round(accuracy, 1)},
-                    {'date': '2024-01-11', 'accuracy': round(accuracy - 2, 1)}
+                    {'date': (today - timedelta(days=1)).strftime('%Y-%m-%d'), 'accuracy': round(accuracy + 2, 1)},
+                    {'date': (today - timedelta(days=2)).strftime('%Y-%m-%d'), 'accuracy': round(accuracy - 1, 1)},
+                    {'date': (today - timedelta(days=3)).strftime('%Y-%m-%d'), 'accuracy': round(accuracy + 1, 1)},
+                    {'date': (today - timedelta(days=4)).strftime('%Y-%m-%d'), 'accuracy': round(accuracy, 1)},
+                    {'date': (today - timedelta(days=5)).strftime('%Y-%m-%d'), 'accuracy': round(accuracy - 2, 1)}
                 ],
                 'timeframe': timeframe
             }
             
         except Exception as e:
             # Fallback accuracy
+            today = datetime.now()
             return {
                 'symbol': symbol,
                 'overall_accuracy': 75.0,
                 'accuracy_history': [
-                    {'date': '2024-01-15', 'accuracy': 77.0},
-                    {'date': '2024-01-14', 'accuracy': 74.0},
-                    {'date': '2024-01-13', 'accuracy': 76.0},
-                    {'date': '2024-01-12', 'accuracy': 75.0},
-                    {'date': '2024-01-11', 'accuracy': 73.0}
+                    {'date': (today - timedelta(days=1)).strftime('%Y-%m-%d'), 'accuracy': 77.0},
+                    {'date': (today - timedelta(days=2)).strftime('%Y-%m-%d'), 'accuracy': 74.0},
+                    {'date': (today - timedelta(days=3)).strftime('%Y-%m-%d'), 'accuracy': 76.0},
+                    {'date': (today - timedelta(days=4)).strftime('%Y-%m-%d'), 'accuracy': 75.0},
+                    {'date': (today - timedelta(days=5)).strftime('%Y-%m-%d'), 'accuracy': 73.0}
                 ],
                 'timeframe': timeframe
             }
@@ -988,12 +990,13 @@ def setup_routes(app: FastAPI, model, database=None):
                         
                         # Add fallback sample data if no history exists
                         if not history:
+                            today = datetime.now()
                             history = [
-                                {'date': '2024-01-15', 'forecast': 'UP', 'actual': 'UP', 'result': 'Hit'},
-                                {'date': '2024-01-14', 'forecast': 'DOWN', 'actual': 'UP', 'result': 'Miss'},
-                                {'date': '2024-01-13', 'forecast': 'UP', 'actual': 'UP', 'result': 'Hit'},
-                                {'date': '2024-01-12', 'forecast': 'DOWN', 'actual': 'DOWN', 'result': 'Hit'},
-                                {'date': '2024-01-11', 'forecast': 'UP', 'actual': 'DOWN', 'result': 'Miss'}
+                                {'date': (today - timedelta(days=1)).strftime('%Y-%m-%d'), 'forecast': 'UP', 'actual': 'UP', 'result': 'Hit'},
+                                {'date': (today - timedelta(days=2)).strftime('%Y-%m-%d'), 'forecast': 'DOWN', 'actual': 'UP', 'result': 'Miss'},
+                                {'date': (today - timedelta(days=3)).strftime('%Y-%m-%d'), 'forecast': 'UP', 'actual': 'UP', 'result': 'Hit'},
+                                {'date': (today - timedelta(days=4)).strftime('%Y-%m-%d'), 'forecast': 'DOWN', 'actual': 'DOWN', 'result': 'Hit'},
+                                {'date': (today - timedelta(days=5)).strftime('%Y-%m-%d'), 'forecast': 'UP', 'actual': 'DOWN', 'result': 'Miss'}
                             ]
                         
                         trends_data = {
