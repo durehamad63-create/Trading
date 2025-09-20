@@ -328,7 +328,11 @@ class GapFillingService:
                 losses = np.where(price_changes < 0, -price_changes, 0)
                 avg_gain = np.mean(gains) if len(gains) > 0 else 0
                 avg_loss = np.mean(losses) if len(losses) > 0 else 0.01
-                rsi = 100 - (100 / (1 + avg_gain / avg_loss))
+                
+                if avg_loss == 0:
+                    rsi = 100 if avg_gain > 0 else 50
+                else:
+                    rsi = 100 - (100 / (1 + avg_gain / avg_loss))
                 
                 # Volume analysis
                 avg_volume = np.mean(volumes[i-10:i])
