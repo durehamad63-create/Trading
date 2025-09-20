@@ -1563,7 +1563,7 @@ def setup_routes(app: FastAPI, model, database=None):
                 past_prices = []
                 past_timestamps = []
                 
-                # Try to get real historical data first
+                # Get real historical data from database for all timeframes
                 if db and db.pool:
                     try:
                         symbol_tf = f"{symbol}_{timeframe}"
@@ -1573,53 +1573,20 @@ def setup_routes(app: FastAPI, model, database=None):
                                 symbol_tf, config['past']
                             )
                             
-                            # If no data for specific timeframe, try base symbol or 1D data
-                            if not historical_data:
-                                fallback_symbol = f"{symbol}_1D"
-                                historical_data = await conn.fetch(
-                                    "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT $2",
-                                    fallback_symbol, min(config['past'], 30)
-                                )
-                            
                             if historical_data:
                                 for record in reversed(historical_data):
                                     past_prices.append(float(record['price']))
                                     past_timestamps.append(record['timestamp'].isoformat())
-                    except Exception:
-                        pass
+                                print(f"📊 Using {len(past_prices)} real data points for {symbol}_{timeframe}")
+                            else:
+                                print(f"❌ No database data found for {symbol}_{timeframe}")
+                    except Exception as e:
+                        print(f"❌ Database error for {symbol}_{timeframe}: {e}")
                 
-                # Fallback to generated data if no database data
+                # Skip if no real data available
                 if not past_prices:
-                    base_time = datetime.now()
-                    for i in range(config['past']):
-                        if timeframe == '1h':
-                            time_offset = timedelta(hours=config['past'] - i)
-                            timestamp = (base_time - time_offset).replace(minute=0, second=0, microsecond=0)
-                        elif timeframe == '4H':
-                            time_offset = timedelta(hours=(config['past'] - i) * 4)
-                            timestamp = (base_time - time_offset).replace(minute=0, second=0, microsecond=0)
-                        elif timeframe == '1D':
-                            time_offset = timedelta(days=config['past'] - i)
-                            timestamp = (base_time - time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
-                        elif timeframe == '7D':
-                            time_offset = timedelta(days=(config['past'] - i) * 7)
-                            timestamp = (base_time - time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
-                        elif timeframe == '1W':
-                            time_offset = timedelta(weeks=config['past'] - i)
-                            timestamp = (base_time - time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
-                        elif timeframe == '1M':
-                            time_offset = timedelta(days=(config['past'] - i) * 30)
-                            timestamp = (base_time - time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
-                        else:
-                            time_offset = timedelta(days=config['past'] - i)
-                            timestamp = (base_time - time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
-                        
-                        trend_factor = (i / config['past']) * 0.1
-                        volatility = (i % 5 - 2) * 0.02
-                        historical_price = current_price * (0.95 + trend_factor + volatility)
-                        
-                        past_prices.append(round(historical_price, 2))
-                        past_timestamps.append(timestamp.isoformat())
+                    print(f"⚠️ Skipping {symbol}_{timeframe} - no real historical data")
+                    continue
                 
                 # Generate future predictions using ML model
                 future_prices = []
@@ -1664,6 +1631,11 @@ def setup_routes(app: FastAPI, model, database=None):
                 # Combine all timestamps
                 all_timestamps = past_timestamps + future_timestamps
                 
+                # Only send chart data if we have real historical data
+                if not past_prices:
+                    await asyncio.sleep(3)
+                    continue
+                    
                 # Create enhanced chart response
                 chart_data = {
                     "type": "chart_update",
@@ -1682,7 +1654,8 @@ def setup_routes(app: FastAPI, model, database=None):
                         "future": future_prices,
                         "timestamps": all_timestamps
                     },
-                    "update_count": count
+                    "update_count": count,
+                    "data_source": "Real Database Data"
                 }
                 
                 await websocket.send_text(json.dumps(chart_data))
