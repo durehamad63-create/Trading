@@ -54,7 +54,7 @@ class GapFillingService:
         self.db = db_instance
         print("🚀 Starting monthly data collection with ML predictions for all 25 assets")
         
-        # Clean database first
+        # Check database state
         await self._clean_database()
         
         total_processed = 0
@@ -116,17 +116,18 @@ class GapFillingService:
         print("✅ Monthly data collection with ML predictions completed!")
     
     async def _clean_database(self):
-        """Clean all tables to avoid conflicts"""
-        print("🧹 Cleaning database...")
+        """Clean database only if explicitly needed"""
+        print("🧹 Checking database state...")
         try:
             async with self.db.pool.acquire() as conn:
-                await conn.execute("TRUNCATE TABLE forecast_accuracy CASCADE")
-                await conn.execute("TRUNCATE TABLE forecasts CASCADE")
-                await conn.execute("TRUNCATE TABLE actual_prices CASCADE")
-                await conn.execute("TRUNCATE TABLE user_favorites CASCADE")
-            print("✅ Database cleaned")
+                count = await conn.fetchval("SELECT COUNT(*) FROM actual_prices")
+                if count > 100000:  # Only clean if too much data
+                    await conn.execute("DELETE FROM actual_prices WHERE timestamp < NOW() - INTERVAL '2 months'")
+                    print(f"✅ Cleaned old data, kept recent records")
+                else:
+                    print(f"✅ Database has {count} records, no cleaning needed")
         except Exception as e:
-            print(f"⚠️ Database clean warning: {e}")
+            print(f"⚠️ Database check warning: {e}")
     
     async def _get_monthly_data(self, symbol: str, timeframe: str, asset_class: str) -> List[Dict]:
         """Get 1 month of data for symbol and timeframe"""
@@ -461,17 +462,19 @@ class GapFillingService:
         return results
     
     async def _store_historical_data(self, symbol: str, timeframe: str, data: List[Dict]):
-        """Store historical price data"""
+        """Store historical price data with conflict handling"""
         try:
             symbol_tf = f'{symbol}_{timeframe}'
             async with self.db.pool.acquire() as conn:
-                await conn.execute("DELETE FROM actual_prices WHERE symbol = $1", symbol_tf)
-                
                 for item in data:
                     await conn.execute("""
                         INSERT INTO actual_prices (symbol, timeframe, open_price, high, low, 
                                                  close_price, price, volume, timestamp)
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        ON CONFLICT (symbol, timestamp) DO UPDATE SET
+                            price = EXCLUDED.price,
+                            close_price = EXCLUDED.close_price,
+                            volume = EXCLUDED.volume
                     """, symbol_tf, timeframe, item['open'], item['high'], item['low'],
                          item['close'], item['close'], item['volume'], item['timestamp'])
                 
@@ -479,27 +482,26 @@ class GapFillingService:
             print(f"      ❌ Error storing historical data for {symbol_tf}: {e}")
     
     async def _store_predictions(self, symbol: str, timeframe: str, predictions: List[Dict], results: List[Dict]):
-        """Store ML predictions and accuracy results"""
+        """Store ML predictions and accuracy results with conflict handling"""
         try:
             symbol_tf = f'{symbol}_{timeframe}'
             async with self.db.pool.acquire() as conn:
-                await conn.execute("DELETE FROM forecasts WHERE symbol = $1", symbol_tf)
-                await conn.execute("DELETE FROM forecast_accuracy WHERE symbol = $1", symbol_tf)
-                
-                # Store predictions
+                # Store predictions with conflict handling
                 for pred in predictions:
                     await conn.execute("""
                         INSERT INTO forecasts (symbol, predicted_price, confidence, 
                                              forecast_direction, trend_score, created_at)
                         VALUES ($1, $2, $3, $4, $5, $6)
+                        ON CONFLICT DO NOTHING
                     """, symbol_tf, pred['predicted_price'], pred['confidence'],
                          pred['forecast_direction'], pred['trend_score'], pred['timestamp'])
                 
-                # Store accuracy results
+                # Store accuracy results with conflict handling
                 for result in results:
                     await conn.execute("""
                         INSERT INTO forecast_accuracy (symbol, actual_direction, result, evaluated_at)
                         VALUES ($1, $2, $3, $4)
+                        ON CONFLICT DO NOTHING
                     """, symbol_tf, result['actual_direction'], result['result'], result['timestamp'])
                 
         except Exception as e:
