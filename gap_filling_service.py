@@ -467,6 +467,11 @@ class GapFillingService:
             symbol_tf = f'{symbol}_{timeframe}'
             async with self.db.pool.acquire() as conn:
                 for item in data:
+                    # Normalize timestamp to remove microseconds for consistency
+                    normalized_timestamp = item['timestamp'].replace(microsecond=0)
+                    if timeframe in ['1D', '1W']:
+                        normalized_timestamp = normalized_timestamp.replace(hour=0, minute=0, second=0)
+                    
                     await conn.execute("""
                         INSERT INTO actual_prices (symbol, timeframe, open_price, high, low, 
                                                  close_price, price, volume, timestamp)
@@ -476,7 +481,7 @@ class GapFillingService:
                             close_price = EXCLUDED.close_price,
                             volume = EXCLUDED.volume
                     """, symbol_tf, timeframe, item['open'], item['high'], item['low'],
-                         item['close'], item['close'], item['volume'], item['timestamp'])
+                         item['close'], item['close'], item['volume'], normalized_timestamp)
                 
         except Exception as e:
             print(f"      ❌ Error storing historical data for {symbol_tf}: {e}")
