@@ -1572,6 +1572,14 @@ def setup_routes(app: FastAPI, model, database=None):
                                 symbol_tf, config['past']
                             )
                             
+                            # If no data for specific timeframe, try base symbol or 1D data
+                            if not historical_data:
+                                fallback_symbol = f"{symbol}_1D"
+                                historical_data = await conn.fetch(
+                                    "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT $2",
+                                    fallback_symbol, min(config['past'], 30)
+                                )
+                            
                             if historical_data:
                                 for record in reversed(historical_data):
                                     past_prices.append(float(record['price']))
@@ -1581,21 +1589,27 @@ def setup_routes(app: FastAPI, model, database=None):
                 
                 # Fallback to generated data if no database data
                 if not past_prices:
+                    base_time = datetime.now()
                     for i in range(config['past']):
                         if timeframe == '1h':
                             time_offset = timedelta(hours=config['past'] - i)
+                            timestamp = (base_time - time_offset).replace(minute=0, second=0, microsecond=0)
                         elif timeframe == '4H':
                             time_offset = timedelta(hours=(config['past'] - i) * 4)
+                            timestamp = (base_time - time_offset).replace(minute=0, second=0, microsecond=0)
                         elif timeframe == '1D':
                             time_offset = timedelta(days=config['past'] - i)
+                            timestamp = (base_time - time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
                         elif timeframe == '1W':
                             time_offset = timedelta(weeks=config['past'] - i)
+                            timestamp = (base_time - time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
                         elif timeframe == '1M':
                             time_offset = timedelta(days=(config['past'] - i) * 30)
+                            timestamp = (base_time - time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
                         else:
                             time_offset = timedelta(days=config['past'] - i)
+                            timestamp = (base_time - time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
                         
-                        timestamp = datetime.now() - time_offset
                         trend_factor = (i / config['past']) * 0.1
                         volatility = (i % 5 - 2) * 0.02
                         historical_price = current_price * (0.95 + trend_factor + volatility)
@@ -1607,22 +1621,26 @@ def setup_routes(app: FastAPI, model, database=None):
                 future_prices = []
                 future_timestamps = []
                 
+                base_time = datetime.now()
                 for i in range(config['future']):
                     if timeframe == '1h':
                         time_offset = timedelta(hours=i + 1)
+                        timestamp = (base_time + time_offset).replace(minute=0, second=0, microsecond=0)
                     elif timeframe == '4H':
                         time_offset = timedelta(hours=(i + 1) * 4)
+                        timestamp = (base_time + time_offset).replace(minute=0, second=0, microsecond=0)
                     elif timeframe == '1D':
                         time_offset = timedelta(days=i + 1)
+                        timestamp = (base_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
                     elif timeframe == '1W':
                         time_offset = timedelta(weeks=i + 1)
+                        timestamp = (base_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
                     elif timeframe == '1M':
                         time_offset = timedelta(days=(i + 1) * 30)
+                        timestamp = (base_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
                     else:
                         time_offset = timedelta(days=i + 1)
-                    
-                    timestamp = datetime.now() + time_offset
-                    timestamp = timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
+                        timestamp = (base_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
                     
                     # Use ML prediction for future prices
                     if forecast_direction == 'UP':
