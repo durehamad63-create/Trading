@@ -23,20 +23,20 @@ class GapFillingService:
         self.all_symbols = self.crypto_symbols + self.stock_symbols + self.macro_symbols
         
         # Timeframes per asset type
-        self.crypto_stock_timeframes = ['1m', '5m', '15m', '1h', '4H', '1D', '1W']
-        self.macro_timeframes = ['1D', '1W']
+        self.crypto_stock_timeframes = ['1m', '5m', '15m', '1h', '4H', '1D', '7D', '1W', '1M']
+        self.macro_timeframes = ['1D', '7D', '1W', '1M']
         
-        # Monthly data requirements (30 days)
+        # Data requirements (1000 records for all timeframes)
         self.monthly_records = {
-            '1m': 43200, '5m': 8640, '15m': 2880, '1h': 720,
-            '4H': 180, '1D': 30, '1W': 4
+            '1m': 1000, '5m': 1000, '15m': 1000, '1h': 1000,
+            '4H': 1000, '1D': 1000, '7D': 1000, '1W': 1000, '1M': 1000
         }
         
         # Binance mapping for stablecoins
         self.binance_mapping = {'USDT': 'BTCUSDT', 'USDC': 'BTCUSDT'}
         self.binance_intervals = {
             '1m': '1m', '5m': '5m', '15m': '15m', '1h': '1h',
-            '4H': '4h', '1D': '1d', '1W': '1w'
+            '4H': '4h', '1D': '1d', '7D': '1d', '1W': '1w', '1M': '1M'
         }
         
         print(f"🚀 Monthly Data Collector initialized for {len(self.all_symbols)} assets:")
@@ -184,12 +184,12 @@ class GapFillingService:
             try:
                 range_mapping = {
                     '1m': '7d', '5m': '60d', '15m': '60d', '1h': '730d',
-                    '4H': '730d', '1D': '2y', '1W': '5y'
+                    '4H': '730d', '1D': '2y', '7D': '2y', '1W': '5y', '1M': '10y'
                 }
                 
                 interval_mapping = {
                     '1m': '1m', '5m': '5m', '15m': '15m', '1h': '1h',
-                    '4H': '1h', '1D': '1d', '1W': '1wk'
+                    '4H': '1h', '1D': '1d', '7D': '1d', '1W': '1wk', '1M': '1mo'
                 }
                 
                 yahoo_interval = interval_mapping[timeframe]
@@ -227,6 +227,10 @@ class GapFillingService:
                                 
                                 if timeframe == '4H':
                                     filtered_data = self._aggregate_to_4h(filtered_data)
+                                elif timeframe == '7D':
+                                    filtered_data = self._aggregate_to_7d(filtered_data)
+                                elif timeframe == '1M':
+                                    filtered_data = self._aggregate_to_1m(filtered_data)
                                 
                                 print(f"    ✅ {symbol} {timeframe}: Got {len(filtered_data)} records from Yahoo")
                                 return filtered_data
@@ -264,6 +268,52 @@ class GapFillingService:
         
         return aggregated
     
+    def _aggregate_to_7d(self, data: List[Dict]) -> List[Dict]:
+        """Aggregate daily data to 7-day periods"""
+        if not data:
+            return []
+        
+        aggregated = []
+        i = 0
+        
+        while i < len(data) - 6:
+            chunk = data[i:i+7]
+            if len(chunk) >= 5:
+                aggregated.append({
+                    'timestamp': chunk[-1]['timestamp'],
+                    'open': chunk[0]['open'],
+                    'high': max(d['high'] for d in chunk),
+                    'low': min(d['low'] for d in chunk),
+                    'close': chunk[-1]['close'],
+                    'volume': sum(d['volume'] for d in chunk)
+                })
+            i += 7
+        
+        return aggregated
+    
+    def _aggregate_to_1m(self, data: List[Dict]) -> List[Dict]:
+        """Aggregate daily data to monthly periods"""
+        if not data:
+            return []
+        
+        aggregated = []
+        i = 0
+        
+        while i < len(data) - 29:
+            chunk = data[i:i+30]
+            if len(chunk) >= 20:
+                aggregated.append({
+                    'timestamp': chunk[-1]['timestamp'],
+                    'open': chunk[0]['open'],
+                    'high': max(d['high'] for d in chunk),
+                    'low': min(d['low'] for d in chunk),
+                    'close': chunk[-1]['close'],
+                    'volume': sum(d['volume'] for d in chunk)
+                })
+            i += 30
+        
+        return aggregated
+    
     async def _get_macro_data(self, symbol: str, timeframe: str) -> List[Dict]:
         """Generate synthetic macro economic data for 1 month"""
         try:
@@ -272,7 +322,7 @@ class GapFillingService:
                 'FED_RATE': 5.25, 'CONSUMER_CONFIDENCE': 102.3
             }
             
-            total_needed = self.monthly_records.get(timeframe, 30)
+            total_needed = self.monthly_records.get(timeframe, 1000)
             data = []
             base_value = base_values.get(symbol, 100)
             
@@ -280,9 +330,15 @@ class GapFillingService:
                 if timeframe == '1D':
                     timestamp = datetime.now() - timedelta(days=total_needed - i)
                     variation = random.uniform(-0.002, 0.002)
+                elif timeframe == '7D':
+                    timestamp = datetime.now() - timedelta(days=(total_needed - i) * 7)
+                    variation = random.uniform(-0.008, 0.008)
                 elif timeframe == '1W':
                     timestamp = datetime.now() - timedelta(weeks=total_needed - i)
                     variation = random.uniform(-0.01, 0.01)
+                elif timeframe == '1M':
+                    timestamp = datetime.now() - timedelta(days=(total_needed - i) * 30)
+                    variation = random.uniform(-0.02, 0.02)
                 else:
                     timestamp = datetime.now() - timedelta(days=total_needed - i)
                     variation = random.uniform(-0.005, 0.005)

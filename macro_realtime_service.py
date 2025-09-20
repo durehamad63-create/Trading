@@ -30,6 +30,16 @@ class MacroRealtimeService:
         
         load_dotenv()
         self.session = None
+        self.fred_api_key = os.getenv('FRED_API_KEY')
+        
+        # FRED series IDs for real economic data
+        self.fred_series = {
+            'GDP': 'GDP',
+            'CPI': 'CPIAUCSL',
+            'UNEMPLOYMENT': 'UNRATE',
+            'FED_RATE': 'FEDFUNDS',
+            'CONSUMER_CONFIDENCE': 'UMCSENT'
+        }
         
         # Use centralized cache manager
         from utils.cache_manager import CacheManager, CacheKeys
@@ -45,30 +55,35 @@ class MacroRealtimeService:
         asyncio.create_task(self._macro_data_stream())
         
     async def _macro_data_stream(self):
-        """Simulate macro economic data updates"""
+        """Fetch real macro economic data from FRED API"""
         while True:
             try:
                 for symbol, config in self.macro_indicators.items():
-                    # Simulate realistic economic data changes
-                    base_value = config['value']
-                    trend = config['change']
-                    volatility = config['volatility']
+                    # Try to get real FRED data first
+                    real_data = await self._fetch_fred_data(symbol)
                     
-                    # Add realistic noise and trend
-                    change = np.random.normal(trend, volatility)
-                    new_value = base_value * (1 + change)
-                    
-                    # Update base value for next iteration
-                    self.macro_indicators[symbol]['value'] = new_value
-                    
-                    # Calculate percentage change
-                    change_pct = change * 100
+                    if real_data:
+                        new_value = real_data['value']
+                        change_pct = real_data['change_pct']
+                        print(f"📊 FRED: {symbol} = {new_value} ({change_pct:+.2f}%)")
+                    else:
+                        # Fallback to simulation if FRED fails
+                        base_value = config['value']
+                        trend = config['change']
+                        volatility = config['volatility']
+                        
+                        change = np.random.normal(trend, volatility)
+                        new_value = base_value * (1 + change)
+                        change_pct = change * 100
+                        
+                        # Update base value for next iteration
+                        self.macro_indicators[symbol]['value'] = new_value
                     
                     # Update cache
                     cache_data = {
                         'current_price': new_value,
                         'change_24h': change_pct,
-                        'volume': 1000000,  # Simulated volume
+                        'volume': 1000000,
                         'timestamp': datetime.now(),
                         'unit': config['unit']
                     }
@@ -76,7 +91,7 @@ class MacroRealtimeService:
                     
                     # Cache using centralized manager
                     cache_key = self.cache_keys.price(symbol, 'macro')
-                    self.cache_manager.set_cache(cache_key, cache_data, ttl=60)
+                    self.cache_manager.set_cache(cache_key, cache_data, ttl=300)  # 5 min cache for FRED data
     
                     
                     # Macro updates (logging removed)
@@ -86,8 +101,8 @@ class MacroRealtimeService:
                         asyncio.create_task(self._store_macro_data_all_timeframes(symbol, self.price_cache[symbol]))
                         asyncio.create_task(self._broadcast_macro_update(symbol, self.price_cache[symbol]))
                 
-                # Update every 30 seconds (macro data changes slowly)
-                await asyncio.sleep(30)
+                # Update every 5 minutes (FRED data updates infrequently)
+                await asyncio.sleep(300)
                 
             except Exception as e:
                 ErrorHandler.log_stream_error('macro', 'ALL', str(e))
@@ -369,6 +384,55 @@ class MacroRealtimeService:
         """Remove macro indicator connection"""
         if symbol in self.active_connections and connection_id in self.active_connections[symbol]:
             del self.active_connections[symbol][connection_id]
+    
+    async def _fetch_fred_data(self, symbol):
+        """Fetch real data from FRED API"""
+        if not self.fred_api_key:
+            return None
+            
+        try:
+            series_id = self.fred_series.get(symbol)
+            if not series_id:
+                return None
+                
+            # Get latest 2 observations to calculate change
+            url = f"https://api.stlouisfed.org/fred/series/observations"
+            params = {
+                'series_id': series_id,
+                'api_key': self.fred_api_key,
+                'file_type': 'json',
+                'limit': 2,
+                'sort_order': 'desc'
+            }
+            
+            if not self.session:
+                self.session = aiohttp.ClientSession()
+                
+            async with self.session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    observations = data.get('observations', [])
+                    
+                    if len(observations) >= 1:
+                        current_obs = observations[0]
+                        current_value = float(current_obs['value'])
+                        
+                        # Calculate change if we have previous value
+                        change_pct = 0
+                        if len(observations) >= 2:
+                            prev_value = float(observations[1]['value'])
+                            if prev_value != 0:
+                                change_pct = ((current_value - prev_value) / prev_value) * 100
+                        
+                        return {
+                            'value': current_value,
+                            'change_pct': change_pct,
+                            'date': current_obs['date']
+                        }
+                        
+        except Exception as e:
+            print(f"❌ FRED API error for {symbol}: {e}")
+            return None
     
     async def close(self):
         """Close the service"""
