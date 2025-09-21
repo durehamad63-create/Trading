@@ -1612,27 +1612,38 @@ def setup_routes(app: FastAPI, model, database=None):
                     last_prediction_time = current_time
                     print(f"🔮 Generating consistent forecast for {symbol} ({config['future']} points)")
                 
-                    # Generate consistent forecast line (no random elements)
+                    # Generate realistic forecast line that blends smoothly from historical data
                     import hashlib
+                    import math
                     
-                    # Use symbol hash for deterministic but varied predictions
+                    # Use symbol hash for deterministic predictions
                     symbol_seed = int(hashlib.md5(f"{symbol}_{timeframe}".encode()).hexdigest()[:8], 16)
                     
-                    # Calculate base trend from ML prediction
-                    if past_prices and len(past_prices) >= 3:
-                        recent_trend = (past_prices[-1] - past_prices[-3]) / past_prices[-3]
-                    else:
-                        recent_trend = (predicted_price - current_price) / current_price
+                    # Start from last historical price for smooth transition
+                    start_price = past_prices[-1] if past_prices else current_price
                     
-                    # Deterministic trend based on forecast direction
+                    # Calculate realistic trend from recent price action
+                    if past_prices and len(past_prices) >= 5:
+                        # Use slope of last 5 points for trend
+                        recent_prices = past_prices[-5:]
+                        price_changes = [(recent_prices[i] - recent_prices[i-1]) / recent_prices[i-1] for i in range(1, len(recent_prices))]
+                        avg_change = sum(price_changes) / len(price_changes)
+                        momentum = avg_change * 0.7  # 70% momentum continuation
+                    else:
+                        momentum = (predicted_price - current_price) / current_price * 0.5
+                    
+                    # ML prediction influence
+                    ml_trend = (predicted_price - start_price) / start_price
+                    
+                    # Blend momentum with ML prediction
                     if forecast_direction == 'UP':
-                        base_trend = 0.015  # 1.5% growth per period
+                        target_trend = max(0.002, (momentum + ml_trend) / 2)  # Min 0.2% per period
                     elif forecast_direction == 'DOWN':
-                        base_trend = -0.015  # 1.5% decline per period
+                        target_trend = min(-0.002, (momentum + ml_trend) / 2)  # Min -0.2% per period
                     else:
-                        base_trend = recent_trend * 0.3  # Mild continuation
+                        target_trend = momentum * 0.5  # Mild continuation
                     
-                    # Generate consistent forecast points
+                    # Generate smooth forecast curve
                     new_forecast_line = []
                     new_forecast_timestamps = []
                     
@@ -1660,21 +1671,34 @@ def setup_routes(app: FastAPI, model, database=None):
                             time_offset = timedelta(days=i + 1)
                             timestamp = (current_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
                         
-                        # Deterministic price calculation (no random elements)
-                        cumulative_change = base_trend * (i + 1)
+                        # Create smooth price progression
+                        if i == 0:
+                            # First point: smooth transition from last historical price
+                            price_change = target_trend * 0.5  # Gentle start
+                            future_price = start_price * (1 + price_change)
+                        else:
+                            # Subsequent points: build on previous with realistic curves
+                            prev_price = new_forecast_line[i-1]
+                            
+                            # Create natural market curves using sine wave for smoothness
+                            curve_factor = math.sin((i / config['future']) * math.pi / 2)  # 0 to 1 curve
+                            
+                            # Progressive trend with curve
+                            step_change = target_trend * (0.8 + 0.4 * curve_factor)
+                            
+                            # Add deterministic micro-variations for realism
+                            micro_var = ((symbol_seed + i * 7) % 20 - 10) / 10000  # ±0.1% variation
+                            
+                            total_change = step_change + micro_var
+                            future_price = prev_price * (1 + total_change)
                         
-                        # Add deterministic variation based on symbol and position
-                        variation_factor = ((symbol_seed + i) % 100) / 1000  # 0-0.1 variation
-                        if (symbol_seed + i) % 2 == 0:
-                            variation_factor *= -1
+                        # Ensure realistic bounds
+                        max_deviation = 0.05 * (i + 1)  # Max 5% deviation per step
+                        min_price = start_price * (1 - max_deviation)
+                        max_price = start_price * (1 + max_deviation)
+                        future_price = max(min_price, min(max_price, future_price))
                         
-                        cumulative_change += variation_factor
-                        
-                        # Apply bounds
-                        max_change = 0.1 * (i + 1)  # Max 10% change per period
-                        cumulative_change = max(-max_change, min(max_change, cumulative_change))
-                        
-                        future_price = round(current_price * (1 + cumulative_change), 2)
+                        future_price = round(future_price, 2)
                         future_price = max(0.01, future_price)
                         
                         new_forecast_line.append(future_price)
@@ -1688,20 +1712,30 @@ def setup_routes(app: FastAPI, model, database=None):
                 future_prices = consistent_forecast_line or []
                 future_timestamps = consistent_forecast_timestamps or []
                 
-                # Ensure forecast line shows clear trend (only when generating new forecast)
-                if should_update_prediction and len(future_prices) >= 2:
-                    if forecast_direction == 'UP':
-                        # Ensure upward trend
-                        for i in range(1, len(future_prices)):
-                            if future_prices[i] <= future_prices[i-1]:
-                                future_prices[i] = future_prices[i-1] * 1.005
-                    elif forecast_direction == 'DOWN':
-                        # Ensure downward trend
-                        for i in range(1, len(future_prices)):
-                            if future_prices[i] >= future_prices[i-1]:
-                                future_prices[i] = future_prices[i-1] * 0.995
+                # Apply final smoothing for natural curves (only when generating new forecast)
+                if should_update_prediction and len(future_prices) >= 3:
+                    # Apply moving average smoothing for natural curves
+                    smoothed_prices = [future_prices[0]]  # Keep first point
                     
-                    # Update stored forecast after smoothing
+                    for i in range(1, len(future_prices) - 1):
+                        # 3-point moving average for smoothness
+                        smoothed = (future_prices[i-1] + future_prices[i] + future_prices[i+1]) / 3
+                        smoothed_prices.append(smoothed)
+                    
+                    smoothed_prices.append(future_prices[-1])  # Keep last point
+                    
+                    # Ensure trend direction is maintained
+                    if forecast_direction == 'UP':
+                        for i in range(1, len(smoothed_prices)):
+                            if smoothed_prices[i] < smoothed_prices[0] * (1 + 0.001 * i):
+                                smoothed_prices[i] = smoothed_prices[0] * (1 + 0.001 * i)
+                    elif forecast_direction == 'DOWN':
+                        for i in range(1, len(smoothed_prices)):
+                            if smoothed_prices[i] > smoothed_prices[0] * (1 - 0.001 * i):
+                                smoothed_prices[i] = smoothed_prices[0] * (1 - 0.001 * i)
+                    
+                    # Update with smoothed values
+                    future_prices = [round(p, 2) for p in smoothed_prices]
                     consistent_forecast_line = future_prices
                 
                 # Combine all timestamps
@@ -1729,7 +1763,8 @@ def setup_routes(app: FastAPI, model, database=None):
                     "data_source": "Real Database Data",
                     "prediction_updated": should_update_prediction,
                     "next_prediction_update": (last_prediction_time + timedelta(seconds=config['update_seconds'])).isoformat() if last_prediction_time else None,
-                    "forecast_stable": not should_update_prediction
+                    "forecast_stable": not should_update_prediction,
+                    "smooth_transition": len(past_prices) > 0 and len(future_prices) > 0
                 }
                 
                 await websocket.send_text(json.dumps(chart_data))
