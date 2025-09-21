@@ -1525,15 +1525,15 @@ def setup_routes(app: FastAPI, model, database=None):
             await websocket.close(code=1000, reason=f"Unsupported symbol: {symbol}")
             return
         
-        # Get timeframe-normalized prediction interval
+        # Chart data array lengths as specified
         timeframe_intervals = {
-            '1h': {'past': 24, 'future': 1, 'update_seconds': 60},     # 1 future point, update every minute
-            '1H': {'past': 24, 'future': 1, 'update_seconds': 60},     # Same as 1h
-            '4H': {'past': 24, 'future': 1, 'update_seconds': 240},    # 1 future point, update every 4 minutes
-            '1D': {'past': 30, 'future': 1, 'update_seconds': 1440},   # 1 future point, update every 24 minutes
-            '7D': {'past': 20, 'future': 1, 'update_seconds': 10080},  # 1 future point, update every week
-            '1W': {'past': 12, 'future': 1, 'update_seconds': 10080},  # 1 future point, update every week
-            '1M': {'past': 30, 'future': 1, 'update_seconds': 43200}   # 1 future point, update every month
+            '1h': {'past': 24, 'future': 12, 'update_seconds': 60},    # 36 total points
+            '1H': {'past': 24, 'future': 12, 'update_seconds': 60},    # 36 total points
+            '4H': {'past': 24, 'future': 6, 'update_seconds': 240},    # 30 total points
+            '1D': {'past': 30, 'future': 7, 'update_seconds': 1440},   # 37 total points
+            '7D': {'past': 12, 'future': 4, 'update_seconds': 10080},  # 16 total points
+            '1W': {'past': 12, 'future': 4, 'update_seconds': 10080},  # 16 total points
+            '1M': {'past': 30, 'future': 7, 'update_seconds': 43200}   # 37 total points
         }
         
         config = timeframe_intervals.get(timeframe, {'past': 30, 'future': 1, 'update_seconds': 1440})
@@ -1599,7 +1599,10 @@ def setup_routes(app: FastAPI, model, database=None):
                 if not past_prices:
                     continue
                 
-                # Generate consistent future prediction (only update periodically)
+                # Generate future predictions with correct array length
+                future_prices = []
+                future_timestamps = []
+                
                 current_time = datetime.now()
                 should_update_prediction = (
                     consistent_future_price is None or 
@@ -1608,39 +1611,53 @@ def setup_routes(app: FastAPI, model, database=None):
                 )
                 
                 if should_update_prediction:
-                    # Calculate next prediction timestamp based on timeframe
-                    if timeframe in ['1h', '1H']:
-                        next_time = (current_time + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-                    elif timeframe == '4H':
-                        next_time = (current_time + timedelta(hours=4)).replace(minute=0, second=0, microsecond=0)
-                    elif timeframe == '1D':
-                        next_time = (current_time + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-                    elif timeframe == '7D':
-                        next_time = (current_time + timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
-                    elif timeframe == '1W':
-                        next_time = (current_time + timedelta(weeks=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-                    elif timeframe == '1M':
-                        next_time = (current_time + timedelta(days=30)).replace(hour=0, minute=0, second=0, microsecond=0)
-                    else:
-                        next_time = (current_time + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-                    
-                    # Generate consistent future price based on ML prediction
-                    if forecast_direction == 'UP':
-                        growth_factor = 1.02  # 2% increase
-                    elif forecast_direction == 'DOWN':
-                        growth_factor = 0.98  # 2% decrease
-                    else:
-                        growth_factor = 1.00  # No change for HOLD
-                    
-                    consistent_future_price = round(predicted_price * growth_factor, 2)
-                    consistent_future_timestamp = next_time.isoformat()
                     last_prediction_time = current_time
-                    
-                    print(f"🔮 Updated prediction for {symbol}: ${consistent_future_price} at {next_time.strftime('%H:%M')}")
+                    print(f"🔮 Updating predictions for {symbol} ({config['future']} points)")
                 
-                # Create single future point
-                future_prices = [consistent_future_price] if consistent_future_price else []
-                future_timestamps = [consistent_future_timestamp] if consistent_future_timestamp else []
+                # Generate all future points based on timeframe
+                for i in range(config['future']):
+                    if timeframe in ['1h', '1H']:
+                        time_offset = timedelta(hours=i + 1)
+                        timestamp = (current_time + time_offset).replace(minute=0, second=0, microsecond=0)
+                    elif timeframe == '4H':
+                        time_offset = timedelta(hours=(i + 1) * 4)
+                        timestamp = (current_time + time_offset).replace(minute=0, second=0, microsecond=0)
+                    elif timeframe == '1D':
+                        time_offset = timedelta(days=i + 1)
+                        timestamp = (current_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
+                    elif timeframe == '7D':
+                        time_offset = timedelta(days=(i + 1) * 7)
+                        timestamp = (current_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
+                    elif timeframe == '1W':
+                        time_offset = timedelta(weeks=i + 1)
+                        timestamp = (current_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
+                    elif timeframe == '1M':
+                        time_offset = timedelta(days=(i + 1) * 30)
+                        timestamp = (current_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
+                    else:
+                        time_offset = timedelta(days=i + 1)
+                        timestamp = (current_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
+                    
+                    # Only update last point if not updating all predictions
+                    if should_update_prediction or i == config['future'] - 1:
+                        if forecast_direction == 'UP':
+                            growth_factor = 1 + (i + 1) * 0.01
+                        elif forecast_direction == 'DOWN':
+                            growth_factor = 1 - (i + 1) * 0.01
+                        else:
+                            growth_factor = 1 + ((i % 3 - 1) * 0.005)
+                        
+                        future_price = round(predicted_price * growth_factor, 2)
+                    else:
+                        # Keep existing prediction for non-last points
+                        future_price = consistent_future_price or predicted_price
+                    
+                    future_prices.append(future_price)
+                    future_timestamps.append(timestamp.isoformat())
+                
+                # Store last future price for consistency
+                if future_prices:
+                    consistent_future_price = future_prices[-1]
                 
                 # Combine all timestamps
                 all_timestamps = past_timestamps + future_timestamps
