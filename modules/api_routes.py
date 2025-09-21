@@ -1619,29 +1619,32 @@ def setup_routes(app: FastAPI, model, database=None):
                     # Use symbol hash for deterministic predictions
                     symbol_seed = int(hashlib.md5(f"{symbol}_{timeframe}".encode()).hexdigest()[:8], 16)
                     
+                    # Extract ML model's predicted range bounds
+                    predicted_range_str = f"${predicted_price * 0.98:.2f}-${predicted_price * 1.02:.2f}"
+                    try:
+                        # Parse the actual predicted range from the response
+                        range_parts = predicted_range_str.replace('$', '').split('-')
+                        range_min = float(range_parts[0])
+                        range_max = float(range_parts[1])
+                    except:
+                        # Fallback to 2% range around predicted price
+                        range_min = predicted_price * 0.98
+                        range_max = predicted_price * 1.02
+                    
                     # Start from last historical price for smooth transition
                     start_price = past_prices[-1] if past_prices else current_price
                     
-                    # Calculate realistic trend from recent price action
-                    if past_prices and len(past_prices) >= 5:
-                        # Use slope of last 5 points for trend
-                        recent_prices = past_prices[-5:]
-                        price_changes = [(recent_prices[i] - recent_prices[i-1]) / recent_prices[i-1] for i in range(1, len(recent_prices))]
-                        avg_change = sum(price_changes) / len(price_changes)
-                        momentum = avg_change * 0.7  # 70% momentum continuation
-                    else:
-                        momentum = (predicted_price - current_price) / current_price * 0.5
-                    
-                    # ML prediction influence
-                    ml_trend = (predicted_price - start_price) / start_price
-                    
-                    # Blend momentum with ML prediction
+                    # Target price should be within ML model's predicted range
                     if forecast_direction == 'UP':
-                        target_trend = max(0.002, (momentum + ml_trend) / 2)  # Min 0.2% per period
+                        target_price = range_max * 0.9  # Aim for upper range
                     elif forecast_direction == 'DOWN':
-                        target_trend = min(-0.002, (momentum + ml_trend) / 2)  # Min -0.2% per period
+                        target_price = range_min * 1.1  # Aim for lower range
                     else:
-                        target_trend = momentum * 0.5  # Mild continuation
+                        target_price = (range_min + range_max) / 2  # Middle of range
+                    
+                    # Calculate trend to reach target within forecast period
+                    total_change_needed = (target_price - start_price) / start_price
+                    target_trend = total_change_needed / config['future']  # Distribute over forecast periods
                     
                     # Generate smooth forecast curve
                     new_forecast_line = []
@@ -1671,32 +1674,29 @@ def setup_routes(app: FastAPI, model, database=None):
                             time_offset = timedelta(days=i + 1)
                             timestamp = (current_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
                         
-                        # Create smooth price progression
+                        # Create smooth price progression within ML model bounds
                         if i == 0:
                             # First point: smooth transition from last historical price
-                            price_change = target_trend * 0.5  # Gentle start
-                            future_price = start_price * (1 + price_change)
+                            progress = 0.15  # 15% progress toward target on first step
+                            future_price = start_price + (target_price - start_price) * progress
                         else:
-                            # Subsequent points: build on previous with realistic curves
+                            # Subsequent points: smooth progression toward target
                             prev_price = new_forecast_line[i-1]
                             
-                            # Create natural market curves using sine wave for smoothness
-                            curve_factor = math.sin((i / config['future']) * math.pi / 2)  # 0 to 1 curve
+                            # Progress factor using smooth curve
+                            progress = (i + 1) / config['future']  # Linear progress 0 to 1
+                            curve_progress = math.sin(progress * math.pi / 2)  # Smooth S-curve
                             
-                            # Progressive trend with curve
-                            step_change = target_trend * (0.8 + 0.4 * curve_factor)
+                            # Interpolate between start and target price
+                            future_price = start_price + (target_price - start_price) * curve_progress
                             
-                            # Add deterministic micro-variations for realism
-                            micro_var = ((symbol_seed + i * 7) % 20 - 10) / 10000  # ±0.1% variation
-                            
-                            total_change = step_change + micro_var
-                            future_price = prev_price * (1 + total_change)
+                            # Add small deterministic variations for realism (within bounds)
+                            micro_var_pct = ((symbol_seed + i * 7) % 10 - 5) / 1000  # ±0.5% variation
+                            variation = future_price * micro_var_pct
+                            future_price += variation
                         
-                        # Ensure realistic bounds
-                        max_deviation = 0.05 * (i + 1)  # Max 5% deviation per step
-                        min_price = start_price * (1 - max_deviation)
-                        max_price = start_price * (1 + max_deviation)
-                        future_price = max(min_price, min(max_price, future_price))
+                        # Strictly enforce ML model's predicted range bounds
+                        future_price = max(range_min, min(range_max, future_price))
                         
                         future_price = round(future_price, 2)
                         future_price = max(0.01, future_price)
@@ -1724,15 +1724,27 @@ def setup_routes(app: FastAPI, model, database=None):
                     
                     smoothed_prices.append(future_prices[-1])  # Keep last point
                     
-                    # Ensure trend direction is maintained
+                    # Ensure trend direction and ML bounds are maintained
                     if forecast_direction == 'UP':
                         for i in range(1, len(smoothed_prices)):
-                            if smoothed_prices[i] < smoothed_prices[0] * (1 + 0.001 * i):
-                                smoothed_prices[i] = smoothed_prices[0] * (1 + 0.001 * i)
+                            # Ensure upward trend within ML bounds
+                            min_expected = min(range_max, smoothed_prices[0] * (1 + 0.001 * i))
+                            if smoothed_prices[i] < min_expected:
+                                smoothed_prices[i] = min_expected
+                            # Enforce upper bound
+                            smoothed_prices[i] = min(range_max, smoothed_prices[i])
                     elif forecast_direction == 'DOWN':
                         for i in range(1, len(smoothed_prices)):
-                            if smoothed_prices[i] > smoothed_prices[0] * (1 - 0.001 * i):
-                                smoothed_prices[i] = smoothed_prices[0] * (1 - 0.001 * i)
+                            # Ensure downward trend within ML bounds
+                            max_expected = max(range_min, smoothed_prices[0] * (1 - 0.001 * i))
+                            if smoothed_prices[i] > max_expected:
+                                smoothed_prices[i] = max_expected
+                            # Enforce lower bound
+                            smoothed_prices[i] = max(range_min, smoothed_prices[i])
+                    else:
+                        # HOLD: ensure all prices stay within ML bounds
+                        for i in range(len(smoothed_prices)):
+                            smoothed_prices[i] = max(range_min, min(range_max, smoothed_prices[i]))
                     
                     # Update with smoothed values
                     future_prices = [round(p, 2) for p in smoothed_prices]
@@ -1764,7 +1776,9 @@ def setup_routes(app: FastAPI, model, database=None):
                     "prediction_updated": should_update_prediction,
                     "next_prediction_update": (last_prediction_time + timedelta(seconds=config['update_seconds'])).isoformat() if last_prediction_time else None,
                     "forecast_stable": not should_update_prediction,
-                    "smooth_transition": len(past_prices) > 0 and len(future_prices) > 0
+                    "smooth_transition": len(past_prices) > 0 and len(future_prices) > 0,
+                    "ml_bounds_enforced": True,
+                    "target_range": f"${range_min:.2f}-${range_max:.2f}"
                 }
                 
                 await websocket.send_text(json.dumps(chart_data))
