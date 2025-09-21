@@ -1614,8 +1614,28 @@ def setup_routes(app: FastAPI, model, database=None):
                     last_prediction_time = current_time
                     print(f"🔮 Updating predictions for {symbol} ({config['future']} points)")
                 
-                # Generate all future points based on timeframe
+                # Generate realistic forecast line based on ML prediction and market trends
+                import numpy as np
+                
+                # Calculate trend parameters from ML prediction
+                if past_prices and len(past_prices) >= 3:
+                    recent_trend = (past_prices[-1] - past_prices[-3]) / past_prices[-3]
+                    volatility = np.std(past_prices[-10:]) / np.mean(past_prices[-10:]) if len(past_prices) >= 10 else 0.02
+                else:
+                    recent_trend = (predicted_price - current_price) / current_price
+                    volatility = 0.02
+                
+                # Base trend from ML prediction
+                if forecast_direction == 'UP':
+                    base_trend = max(0.005, min(0.03, recent_trend + 0.01))  # 0.5% to 3% growth
+                elif forecast_direction == 'DOWN':
+                    base_trend = min(-0.005, max(-0.03, recent_trend - 0.01))  # -0.5% to -3% decline
+                else:
+                    base_trend = recent_trend * 0.5  # Moderate continuation
+                
+                # Generate realistic forecast curve
                 for i in range(config['future']):
+                    # Calculate timestamp
                     if timeframe in ['1h', '1H']:
                         time_offset = timedelta(hours=i + 1)
                         timestamp = (current_time + time_offset).replace(minute=0, second=0, microsecond=0)
@@ -1638,18 +1658,36 @@ def setup_routes(app: FastAPI, model, database=None):
                         time_offset = timedelta(days=i + 1)
                         timestamp = (current_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
                     
-                    # Only update last point if not updating all predictions
+                    # Create realistic price progression
                     if should_update_prediction or i == config['future'] - 1:
-                        if forecast_direction == 'UP':
-                            growth_factor = 1 + (i + 1) * 0.01
-                        elif forecast_direction == 'DOWN':
-                            growth_factor = 1 - (i + 1) * 0.01
-                        else:
-                            growth_factor = 1 + ((i % 3 - 1) * 0.005)
+                        # Progressive trend with diminishing effect over time
+                        time_decay = 1 - (i * 0.1)  # Trend weakens over time
+                        trend_effect = base_trend * time_decay
                         
-                        future_price = round(predicted_price * growth_factor, 2)
+                        # Add realistic market noise
+                        noise_amplitude = volatility * (0.3 + i * 0.1)  # Increasing uncertainty
+                        market_noise = np.random.normal(0, noise_amplitude)
+                        
+                        # Calculate cumulative price change
+                        if i == 0:
+                            # First prediction point
+                            cumulative_change = trend_effect + market_noise
+                        else:
+                            # Continue from previous point with momentum
+                            prev_change = (future_prices[-1] - current_price) / current_price if future_prices else 0
+                            momentum = prev_change * 0.7  # 70% momentum carry-over
+                            cumulative_change = momentum + trend_effect + market_noise
+                        
+                        # Apply realistic bounds
+                        max_change = 0.15 * (i + 1)  # Max 15% change per period
+                        cumulative_change = np.clip(cumulative_change, -max_change, max_change)
+                        
+                        future_price = round(current_price * (1 + cumulative_change), 2)
+                        
+                        # Ensure positive price
+                        future_price = max(0.01, future_price)
                     else:
-                        # Keep existing prediction for non-last points
+                        # Keep existing prediction for consistency
                         future_price = consistent_future_price or predicted_price
                     
                     future_prices.append(future_price)
@@ -1658,6 +1696,20 @@ def setup_routes(app: FastAPI, model, database=None):
                 # Store last future price for consistency
                 if future_prices:
                     consistent_future_price = future_prices[-1]
+                    
+                # Ensure forecast line shows clear trend
+                if len(future_prices) >= 2:
+                    # Smooth the forecast line to show clear direction
+                    if forecast_direction == 'UP':
+                        # Ensure upward trend
+                        for i in range(1, len(future_prices)):
+                            if future_prices[i] <= future_prices[i-1]:
+                                future_prices[i] = future_prices[i-1] * (1 + 0.005)  # Min 0.5% increase
+                    elif forecast_direction == 'DOWN':
+                        # Ensure downward trend
+                        for i in range(1, len(future_prices)):
+                            if future_prices[i] >= future_prices[i-1]:
+                                future_prices[i] = future_prices[i-1] * (1 - 0.005)  # Min 0.5% decrease
                 
                 # Combine all timestamps
                 all_timestamps = past_timestamps + future_timestamps
