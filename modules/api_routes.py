@@ -514,6 +514,7 @@ def setup_routes(app: FastAPI, model, database=None):
                 '1h': {'past': 24, 'future': 12},
                 '4H': {'past': 24, 'future': 6}, 
                 '1D': {'past': 30, 'future': 7},
+                '7D': {'past': 12, 'future': 4},
                 '1W': {'past': 12, 'future': 4},
                 '1M': {'past': 30, 'future': 7}
             }
@@ -553,6 +554,8 @@ def setup_routes(app: FastAPI, model, database=None):
                         time_offset = timedelta(hours=(config['past'] - i) * 4)
                     elif timeframe == '1D':
                         time_offset = timedelta(days=config['past'] - i)
+                    elif timeframe == '7D':
+                        time_offset = timedelta(weeks=config['past'] - i)
                     elif timeframe == '1W':
                         time_offset = timedelta(weeks=config['past'] - i)
                     elif timeframe == '1M':
@@ -579,6 +582,8 @@ def setup_routes(app: FastAPI, model, database=None):
                     time_offset = timedelta(hours=(i + 1) * 4)
                 elif timeframe == '1D':
                     time_offset = timedelta(days=i + 1)
+                elif timeframe == '7D':
+                    time_offset = timedelta(weeks=i + 1)
                 elif timeframe == '1W':
                     time_offset = timedelta(weeks=i + 1)
                 elif timeframe == '1M':
