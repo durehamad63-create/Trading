@@ -592,6 +592,9 @@ def setup_routes(app: FastAPI, model, database=None):
                     time_offset = timedelta(days=i + 1)
                 
                 timestamp = datetime.now() + time_offset
+                # Normalize timestamp format
+                if timeframe in ['1D', '7D', '1W', '1M']:
+                    timestamp = timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
                 
                 # Use ML prediction for future prices
                 if forecast_direction == 'UP':
