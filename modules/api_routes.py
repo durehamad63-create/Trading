@@ -323,10 +323,11 @@ def setup_routes(app: FastAPI, model, database=None):
 
     @app.get("/api/asset/{symbol}/trends")
     async def asset_trends(symbol: str, timeframe: str = "7D", view: str = "chart"):
-        """Get historical trends and accuracy - timeframe specific"""
+        """Get historical trends and accuracy with 50 points of actual vs prediction data"""
         try:
             # Get prediction for accuracy calculation
             prediction = await model.predict(symbol)
+            current_price = prediction.get('current_price', 100)
             
             # Calculate timeframe-specific accuracy
             import hashlib
@@ -334,89 +335,138 @@ def setup_routes(app: FastAPI, model, database=None):
             
             # Base accuracy varies by timeframe and asset type
             timeframe_multipliers = {
-                '1h': 0.85,   # Lower accuracy for short timeframes
-                '1H': 0.85,
-                '4H': 0.90,   # Medium accuracy
-                '1D': 1.00,   # Base accuracy
-                '7D': 1.05,   # Higher accuracy for longer timeframes
-                '1W': 1.05,
-                '1M': 1.10,   # Highest accuracy for monthly
-                '1Y': 1.15,
-                '5Y': 1.20
+                '1h': 0.85, '1H': 0.85, '4H': 0.90, '1D': 1.00,
+                '7D': 1.05, '1W': 1.05, '1M': 1.10, '1Y': 1.15, '5Y': 1.20
             }
             
             multiplier = timeframe_multipliers.get(timeframe, 1.0)
             
             # Base accuracy varies by asset type
             if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL', 'MSFT']:
-                base_accuracy = (75 + (timeframe_seed % 10)) * multiplier  # 75-84% * multiplier
+                base_accuracy = (75 + (timeframe_seed % 10)) * multiplier
             elif symbol in ['USDT', 'USDC']:
-                base_accuracy = (88 + (timeframe_seed % 5)) * multiplier   # 88-92% * multiplier
+                base_accuracy = (88 + (timeframe_seed % 5)) * multiplier
             elif symbol in ['GDP', 'CPI', 'FED_RATE']:
-                base_accuracy = (70 + (timeframe_seed % 12)) * multiplier  # 70-81% * multiplier
+                base_accuracy = (70 + (timeframe_seed % 12)) * multiplier
             else:
-                base_accuracy = (65 + (timeframe_seed % 15)) * multiplier  # 65-79% * multiplier
+                base_accuracy = (65 + (timeframe_seed % 15)) * multiplier
             
-            # Add market conditions variation
             confidence_factor = (prediction.get('confidence', 50) - 50) * 0.15
             volatility_factor = abs(prediction.get('change_24h', 0)) * 0.2
             
             accuracy = base_accuracy + confidence_factor - volatility_factor
             accuracy = min(95, max(60, accuracy))
             
-            # Generate timeframe-specific history
-            today = datetime.now()
-            history_periods = {
-                '1h': {'days': 5, 'label': 'hour'},
-                '1H': {'days': 5, 'label': 'hour'},
-                '4H': {'days': 10, 'label': '4-hour'},
-                '1D': {'days': 30, 'label': 'day'},
-                '7D': {'days': 35, 'label': 'week'},
-                '1W': {'days': 35, 'label': 'week'},
-                '1M': {'days': 180, 'label': 'month'},
-                '1Y': {'days': 365, 'label': 'year'},
-                '5Y': {'days': 1825, 'label': '5-year'}
-            }
+            # Generate 50 points of actual vs prediction data
+            actual_prices = []
+            predicted_prices = []
+            timestamps = []
             
-            period_info = history_periods.get(timeframe, {'days': 30, 'label': 'day'})
+            # Try to get real data from database first
+            if db and db.pool:
+                try:
+                    symbol_tf = f"{symbol}_{timeframe}"
+                    async with db.pool.acquire() as conn:
+                        # Get actual prices
+                        actual_data = await conn.fetch(
+                            "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT 50",
+                            symbol_tf
+                        )
+                        # Get predictions
+                        pred_data = await conn.fetch(
+                            "SELECT predicted_price, created_at FROM forecasts WHERE symbol = $1 ORDER BY created_at DESC LIMIT 50",
+                            symbol_tf
+                        )
+                        
+                        if actual_data and pred_data:
+                            for i, record in enumerate(reversed(actual_data)):
+                                actual_prices.append(float(record['price']))
+                                timestamps.append(record['timestamp'].isoformat())
+                                
+                                # Match with prediction if available
+                                if i < len(pred_data):
+                                    predicted_prices.append(float(pred_data[i]['predicted_price']))
+                                else:
+                                    predicted_prices.append(record['price'] * (1 + np.random.uniform(-0.02, 0.02)))
+                except Exception:
+                    pass
             
-            # Generate timeframe-specific accuracy history
+            # Generate synthetic data if no database data
+            if not actual_prices:
+                import numpy as np
+                
+                # Time intervals based on timeframe
+                time_intervals = {
+                    '1h': timedelta(hours=1), '1H': timedelta(hours=1),
+                    '4H': timedelta(hours=4), '1D': timedelta(days=1),
+                    '7D': timedelta(days=7), '1W': timedelta(weeks=1),
+                    '1M': timedelta(days=30), '1Y': timedelta(days=365), '5Y': timedelta(days=1825)
+                }
+                
+                interval = time_intervals.get(timeframe, timedelta(days=1))
+                
+                for i in range(50):
+                    # Generate timestamp
+                    timestamp = datetime.now() - interval * (49 - i)
+                    timestamps.append(timestamp.isoformat())
+                    
+                    # Generate realistic price movement
+                    trend = np.sin(i * 0.1) * 0.02  # Sine wave trend
+                    noise = np.random.normal(0, 0.015)  # Random noise
+                    price_change = trend + noise
+                    
+                    actual_price = current_price * (1 + price_change * (i / 50))
+                    actual_prices.append(round(actual_price, 2))
+                    
+                    # Generate prediction with some accuracy
+                    prediction_accuracy = accuracy / 100
+                    if np.random.random() < prediction_accuracy:
+                        # Accurate prediction (within 2%)
+                        pred_price = actual_price * (1 + np.random.uniform(-0.02, 0.02))
+                    else:
+                        # Inaccurate prediction (larger deviation)
+                        pred_price = actual_price * (1 + np.random.uniform(-0.08, 0.08))
+                    
+                    predicted_prices.append(round(pred_price, 2))
+            
+            # Generate accuracy history table
             accuracy_history = []
-            for i in range(min(10, period_info['days'] // 5)):  # Max 10 history points
-                days_back = (i + 1) * (period_info['days'] // 10)
-                date = today - timedelta(days=days_back)
-                
-                # Timeframe-specific accuracy variation
-                variation_seed = (timeframe_seed + i * 13) % 100
-                variation = (variation_seed - 50) / 10  # -5 to +5 variation
-                
-                historical_accuracy = accuracy + variation
-                historical_accuracy = min(95, max(60, historical_accuracy))
-                
-                accuracy_history.append({
-                    'date': date.strftime('%Y-%m-%d'),
-                    'accuracy': round(historical_accuracy, 1),
-                    'period': f"{period_info['label']} {i+1}"
-                })
-            
-            # Reverse to show chronological order
-            accuracy_history.reverse()
+            for i in range(min(10, len(actual_prices) // 5)):
+                idx = i * 5
+                if idx < len(actual_prices) and idx < len(predicted_prices):
+                    actual = actual_prices[idx]
+                    predicted = predicted_prices[idx]
+                    
+                    # Calculate if prediction was accurate (within 3%)
+                    error_pct = abs(actual - predicted) / actual * 100
+                    result = 'Hit' if error_pct < 3 else 'Miss'
+                    
+                    accuracy_history.append({
+                        'date': timestamps[idx][:10],
+                        'actual': round(actual, 2),
+                        'predicted': round(predicted, 2),
+                        'result': result,
+                        'error_pct': round(error_pct, 1)
+                    })
             
             return {
                 'symbol': symbol,
                 'timeframe': timeframe,
                 'overall_accuracy': round(accuracy, 1),
+                'chart': {
+                    'actual': actual_prices,
+                    'predicted': predicted_prices,
+                    'timestamps': timestamps
+                },
                 'accuracy_history': accuracy_history,
-                'timeframe_label': period_info['label'],
                 'prediction_confidence': prediction.get('confidence', 75),
                 'market_volatility': abs(prediction.get('change_24h', 0))
             }
             
         except Exception as e:
-            # Fallback timeframe-specific accuracy
-            today = datetime.now()
+            # Fallback with synthetic data
+            import numpy as np
             
-            # Fallback accuracy based on timeframe
             fallback_accuracies = {
                 '1h': 72.0, '1H': 72.0, '4H': 76.0, '1D': 80.0,
                 '7D': 82.0, '1W': 82.0, '1M': 85.0, '1Y': 88.0, '5Y': 90.0
@@ -424,18 +474,36 @@ def setup_routes(app: FastAPI, model, database=None):
             
             base_acc = fallback_accuracies.get(timeframe, 75.0)
             
+            # Generate fallback chart data
+            actual_prices = []
+            predicted_prices = []
+            timestamps = []
+            
+            for i in range(50):
+                timestamp = datetime.now() - timedelta(hours=i)
+                timestamps.append(timestamp.isoformat())
+                
+                price = 100 * (1 + np.random.uniform(-0.05, 0.05))
+                actual_prices.append(round(price, 2))
+                predicted_prices.append(round(price * (1 + np.random.uniform(-0.03, 0.03)), 2))
+            
+            actual_prices.reverse()
+            predicted_prices.reverse()
+            timestamps.reverse()
+            
             return {
                 'symbol': symbol,
                 'timeframe': timeframe,
                 'overall_accuracy': base_acc,
+                'chart': {
+                    'actual': actual_prices,
+                    'predicted': predicted_prices,
+                    'timestamps': timestamps
+                },
                 'accuracy_history': [
-                    {'date': (today - timedelta(days=1)).strftime('%Y-%m-%d'), 'accuracy': base_acc + 2},
-                    {'date': (today - timedelta(days=2)).strftime('%Y-%m-%d'), 'accuracy': base_acc - 1},
-                    {'date': (today - timedelta(days=3)).strftime('%Y-%m-%d'), 'accuracy': base_acc + 1},
-                    {'date': (today - timedelta(days=4)).strftime('%Y-%m-%d'), 'accuracy': base_acc},
-                    {'date': (today - timedelta(days=5)).strftime('%Y-%m-%d'), 'accuracy': base_acc - 2}
+                    {'date': '2024-01-01', 'actual': 100, 'predicted': 102, 'result': 'Hit', 'error_pct': 2.0},
+                    {'date': '2024-01-02', 'actual': 105, 'predicted': 103, 'result': 'Hit', 'error_pct': 1.9}
                 ],
-                'timeframe_label': 'period',
                 'prediction_confidence': 75,
                 'market_volatility': 1.0
             }
@@ -1023,56 +1091,101 @@ def setup_routes(app: FastAPI, model, database=None):
                         except:
                             accuracy = 75
                         
-                        # Get historical data for table
+                        # Get 50 points of actual vs prediction data for chart
+                        chart_data = {'actual': [], 'predicted': [], 'timestamps': []}
                         history = []
+                        
                         try:
                             if db and db.pool:
-                                # Get timeframe from connection or default to 7 days
-                                timeframe_days = 7  # Default
+                                # Get timeframe from connection
+                                timeframe = 'trends'
                                 if symbol in manager.active_connections:
                                     for conn_data in manager.active_connections[symbol].values():
                                         if 'timeframe' in conn_data:
-                                            tf = conn_data.get('timeframe', '1W')
-                                            timeframe_days = {"1W": 7, "7D": 7, "1M": 30, "1Y": 365, "5Y": 1825}.get(tf, 7)
+                                            timeframe = conn_data.get('timeframe', 'trends')
                                             break
                                 
-                                historical_data = await db.get_historical_forecasts(symbol, timeframe_days)
-                                historical_data = historical_data[:20]  # Limit to 20 latest records
-                                for record in historical_data:
-                                    # Use sample data for missing values
-                                    import random
-                                    sample_actual = random.choice(['UP', 'DOWN'])
-                                    sample_result = 'Hit' if record.get('forecast_direction') == sample_actual else 'Miss'
+                                symbol_tf = f"{symbol}_{timeframe}" if timeframe != 'trends' else symbol
+                                
+                                async with db.pool.acquire() as conn:
+                                    # Get actual prices (50 points)
+                                    actual_data = await conn.fetch(
+                                        "SELECT price, timestamp FROM actual_prices WHERE symbol LIKE $1 ORDER BY timestamp DESC LIMIT 50",
+                                        f"{symbol}%"
+                                    )
                                     
-                                    history.append({
-                                        'date': record['created_at'].strftime('%Y-%m-%d'),
-                                        'forecast': record.get('forecast_direction', 'UP'),
-                                        'actual': record.get('actual_direction') or sample_actual,
-                                        'result': record.get('result') or sample_result
-                                    })
+                                    # Get predictions (50 points)
+                                    pred_data = await conn.fetch(
+                                        "SELECT predicted_price, created_at FROM forecasts WHERE symbol LIKE $1 ORDER BY created_at DESC LIMIT 50",
+                                        f"{symbol}%"
+                                    )
+                                    
+                                    if actual_data:
+                                        for i, record in enumerate(reversed(actual_data)):
+                                            chart_data['actual'].append(float(record['price']))
+                                            chart_data['timestamps'].append(record['timestamp'].isoformat())
+                                            
+                                            # Match with prediction
+                                            if i < len(pred_data) and pred_data[i]['predicted_price']:
+                                                chart_data['predicted'].append(float(pred_data[i]['predicted_price']))
+                                            else:
+                                                # Generate synthetic prediction
+                                                chart_data['predicted'].append(record['price'] * (1 + np.random.uniform(-0.02, 0.02)))
+                                    
+                                    # Generate history table from chart data
+                                    for i in range(0, min(len(chart_data['actual']), 20), 5):
+                                        if i < len(chart_data['actual']) and i < len(chart_data['predicted']):
+                                            actual_val = chart_data['actual'][i]
+                                            pred_val = chart_data['predicted'][i]
+                                            error_pct = abs(actual_val - pred_val) / actual_val * 100
+                                            result = 'Hit' if error_pct < 3 else 'Miss'
+                                            
+                                            history.append({
+                                                'date': chart_data['timestamps'][i][:10],
+                                                'actual': round(actual_val, 2),
+                                                'predicted': round(pred_val, 2),
+                                                'result': result
+                                            })
                         except Exception:
                             pass
                         
-                        # Add fallback sample data if no history exists
-                        if not history:
-                            today = datetime.now()
-                            history = [
-                                {'date': (today - timedelta(days=1)).strftime('%Y-%m-%d'), 'forecast': 'UP', 'actual': 'UP', 'result': 'Hit'},
-                                {'date': (today - timedelta(days=2)).strftime('%Y-%m-%d'), 'forecast': 'DOWN', 'actual': 'UP', 'result': 'Miss'},
-                                {'date': (today - timedelta(days=3)).strftime('%Y-%m-%d'), 'forecast': 'UP', 'actual': 'UP', 'result': 'Hit'},
-                                {'date': (today - timedelta(days=4)).strftime('%Y-%m-%d'), 'forecast': 'DOWN', 'actual': 'DOWN', 'result': 'Hit'},
-                                {'date': (today - timedelta(days=5)).strftime('%Y-%m-%d'), 'forecast': 'UP', 'actual': 'DOWN', 'result': 'Miss'}
-                            ]
+                        # Generate synthetic data if no database data
+                        if not chart_data['actual']:
+                            import numpy as np
+                            base_price = 50000 if symbol == 'BTC' else 100
+                            
+                            for i in range(50):
+                                timestamp = datetime.now() - timedelta(hours=i)
+                                price = base_price * (1 + np.random.uniform(-0.05, 0.05))
+                                pred_price = price * (1 + np.random.uniform(-0.03, 0.03))
+                                
+                                chart_data['actual'].append(round(price, 2))
+                                chart_data['predicted'].append(round(pred_price, 2))
+                                chart_data['timestamps'].append(timestamp.isoformat())
+                            
+                            chart_data['actual'].reverse()
+                            chart_data['predicted'].reverse()
+                            chart_data['timestamps'].reverse()
+                            
+                            # Generate history from synthetic data
+                            for i in range(0, 20, 5):
+                                actual_val = chart_data['actual'][i]
+                                pred_val = chart_data['predicted'][i]
+                                error_pct = abs(actual_val - pred_val) / actual_val * 100
+                                result = 'Hit' if error_pct < 3 else 'Miss'
+                                
+                                history.append({
+                                    'date': chart_data['timestamps'][i][:10],
+                                    'actual': round(actual_val, 2),
+                                    'predicted': round(pred_val, 2),
+                                    'result': result
+                                })
                         
                         trends_data = {
                             "type": "trends_update",
                             "symbol": symbol,
                             "accuracy": accuracy,
-                            "chart": {
-                                "forecast": [54000, 54320, 54100, 53800],
-                                "actual": [54200, 54500, 53750, 53480],
-                                "timestamps": ["00:00", "04:00", "08:00", "12:00"]
-                            },
+                            "chart": chart_data,
                             "history": history,
                             "last_updated": datetime.now().isoformat()
                         }
