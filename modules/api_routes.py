@@ -1768,23 +1768,25 @@ def setup_routes(app: FastAPI, model, database=None):
         except Exception as e:
             print(f"❌ Failed to send initial data for {symbol}: {e}")
         
-        # Simplified update loop with guaranteed data
+        # Stable update loop with connection checks
         try:
             count = 0
             while True:
-                count += 1
-                await asyncio.sleep(3)  # Update every 3 seconds
+                # Check connection state before sending
+                if websocket.client_state.name != 'CONNECTED':
+                    print(f"❌ WebSocket not connected for {symbol}, breaking")
+                    break
                 
-                # Get fresh data from fallback cache
+                count += 1
+                
                 try:
+                    # Get data and send update
                     from utils.fallback_cache import fallback_cache
                     fresh_data = await fallback_cache.ensure_data(symbol, timeframe)
                     
                     if fresh_data and len(fresh_data) >= 10:
                         past_data = [point['price'] for point in fresh_data]
                         timestamps = [point['timestamp'].isoformat() for point in fresh_data]
-                        
-                        print(f"🔄 Fresh data for {symbol}: {len(past_data)} points, latest: ${past_data[-1]:.2f}")
                         
                         # Generate future predictions
                         import numpy as np
@@ -1818,26 +1820,28 @@ def setup_routes(app: FastAPI, model, database=None):
                             "last_updated": datetime.now().isoformat()
                         }
                         
-                        await websocket.send_text(json.dumps(chart_update))
-                        
-                        if count % 10 == 0:
-                            print(f"📊 Chart update #{count} for {symbol}: {len(past_data)} past + {len(future_data)} future, price: ${past_data[-1]:.2f}")
+                        # Send with connection check
+                        if websocket.client_state.name == 'CONNECTED':
+                            await websocket.send_text(json.dumps(chart_update))
+                            
+                            if count % 10 == 0:
+                                print(f"📊 Chart update #{count} for {symbol}: price ${past_data[-1]:.2f}")
+                        else:
+                            print(f"❌ Connection lost during send for {symbol}")
+                            break
                     
                 except Exception as e:
-                    print(f"❌ Chart update error for {symbol}: {e}")
-                    # Send error message to client
-                    try:
-                        error_msg = {
-                            "type": "error",
-                            "symbol": symbol,
-                            "message": f"Data fetch failed: {str(e)}"
-                        }
-                        await websocket.send_text(json.dumps(error_msg))
-                    except:
-                        pass
+                    if "going away" in str(e) or "1001" in str(e):
+                        print(f"🔌 Client disconnected for {symbol}")
+                        break
+                    else:
+                        print(f"❌ Chart error for {symbol}: {e}")
+                
+                # Wait before next update
+                await asyncio.sleep(5)  # Increased to 5 seconds for stability
                     
         except WebSocketDisconnect:
-            print(f"📊 Chart WebSocket disconnected for {symbol}")
+            print(f"🔌 Chart WebSocket disconnected for {symbol}")
         except Exception as e:
             print(f"❌ Chart WebSocket error for {symbol}: {e}")
 
