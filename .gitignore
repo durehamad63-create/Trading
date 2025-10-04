@@ -4,7 +4,6 @@ models/*.pkl
 *.ipynb
 *.html
 requirements of project.txt
-.env
 test_all_assets.py
 test_results.json
 Trading_AI_API.postman_collection.json
