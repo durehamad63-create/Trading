@@ -137,20 +137,6 @@ async def lifespan(app: FastAPI):
     # Initialize database in background (model already loaded)
     background_tasks.append(asyncio.create_task(setup_database()))
     
-    # Initialize fallback cache system
-    async def init_fallback_cache():
-        try:
-            from utils.fallback_cache import fallback_cache
-            # Pre-populate cache with key symbols
-            key_symbols = ['BTC', 'ETH', 'NVDA', 'AAPL', 'GDP']
-            for symbol in key_symbols:
-                await fallback_cache.ensure_data(symbol, '1D')
-            print("✅ Fallback cache initialized")
-        except Exception as e:
-            print(f"⚠️ Fallback cache init failed: {e}")
-    
-    background_tasks.append(asyncio.create_task(init_fallback_cache()))
-    
     app.state.background_tasks = background_tasks
     
     yield
@@ -159,13 +145,6 @@ async def lifespan(app: FastAPI):
     for task in background_tasks:
         if not task.done():
             task.cancel()
-    
-    # Close fallback cache
-    try:
-        from utils.fallback_cache import fallback_cache
-        await fallback_cache.close()
-    except Exception:
-        pass
 
 
 app = FastAPI(title="Mobile Trading AI", lifespan=lifespan)

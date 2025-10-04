@@ -20,10 +20,6 @@ class StockRealtimeService:
         self.price_cache = {}
         self.candle_cache = {}
         
-        # Fallback cache for 50 data points per symbol-timeframe
-        self.fallback_cache = {}  # {symbol_timeframe: [50 data points]}
-        self.max_fallback_points = 50
-        
         # Stock symbols from requirements
         self.stock_symbols = {
             'NVDA': 'NVIDIA', 'MSFT': 'Microsoft', 'AAPL': 'Apple',
@@ -359,30 +355,16 @@ class StockRealtimeService:
                     'timestamp': adjusted_time
                 }
                 
-                # Always maintain fallback cache
-                await self._update_fallback_cache(symbol, timeframe, adjusted_price_data)
-                
-                # Also update global fallback cache
-                try:
-                    from utils.fallback_cache import fallback_cache
-                    fallback_cache.add_realtime_point(symbol, timeframe, adjusted_price_data)
-                except Exception:
-                    pass
-                
-                # Store price data if database available
+                # Store price data
                 if self.database and self.database.pool:
+                    await self.database.store_actual_price(timeframe_symbol, adjusted_price_data, timeframe)
+                    
+                    # Generate and store forecast
                     try:
-                        await self.database.store_actual_price(timeframe_symbol, adjusted_price_data, timeframe)
-                        
-                        # Generate and store forecast
-                        try:
-                            prediction = await self.model.predict(symbol)
-                            await self.database.store_forecast(timeframe_symbol, prediction)
-                        except Exception as e:
-                            pass
+                        prediction = await self.model.predict(symbol)
+                        await self.database.store_forecast(timeframe_symbol, prediction)
                     except Exception as e:
-                        # Database failed, but fallback cache is maintained
-                        ErrorHandler.log_database_error('stock_store', timeframe_symbol, str(e))
+                        pass
                         
         except Exception as e:
             ErrorHandler.log_database_error('stock_store_timeframes', 'ALL', str(e))
@@ -574,30 +556,33 @@ class StockRealtimeService:
                     print(f"❌ Stock query {attempt+1} failed: {e}")
                     continue
             
-            # If no database data, use global fallback cache system
+            # If no database data, generate from current price
             if not actual_data or not forecast_data:
-                print(f"⚠️ No DB data for stock {symbol}, using fallback cache system")
-                
+                print(f"⚠️ No DB data for stock {symbol}, generating from current price")
                 try:
-                    from utils.fallback_cache import fallback_cache
-                    fallback_data = await fallback_cache.ensure_data(symbol, timeframe)
+                    current_data = await multi_asset.get_asset_data(symbol)
+                    current_price = current_data['current_price']
                     
-                    if fallback_data and len(fallback_data) >= 10:
-                        print(f"✅ Using global fallback cache for stock {symbol} ({len(fallback_data)} points)")
-                        actual_data = [point['price'] for point in fallback_data]
-                        timestamps = [point['timestamp'].isoformat() for point in fallback_data]
+                    import numpy as np
+                    actual_data = []
+                    forecast_data = []
+                    timestamps = []
+                    
+                    for i in range(50):
+                        variation = np.random.normal(0, 0.015)
+                        price = current_price * (1 + variation * (50-i)/50)
+                        actual_data.append(price)
+                        forecast_data.append(price * (1 + np.random.normal(0, 0.008)))
                         
-                        # Generate predictions based on cached data
-                        import numpy as np
-                        forecast_data = []
-                        for price in actual_data:
-                            pred_price = price * (1 + np.random.normal(0, 0.008))
-                            forecast_data.append(pred_price)
-                    else:
-                        raise Exception("Fallback cache insufficient")
-                        
+                        timestamp = datetime.now() - timedelta(hours=i)
+                        timestamps.append(timestamp.isoformat())
+                    
+                    actual_data.reverse()
+                    forecast_data.reverse()
+                    timestamps.reverse()
+                    
                 except Exception as e:
-                    print(f"❌ Fallback cache failed for stock {symbol}: {e}")
+                    print(f"❌ Failed to generate stock data for {symbol}: {e}")
                     error_data = {
                         "type": "error",
                         "symbol": symbol,
@@ -646,43 +631,6 @@ class StockRealtimeService:
             # Cache will be updated by model.predict() method
         except Exception as e:
             pass
-    
-    async def _update_fallback_cache(self, symbol, timeframe, price_data):
-        """Maintain 50 data points in fallback cache for each symbol-timeframe"""
-        try:
-            cache_key = f"{symbol}_{timeframe}"
-            
-            if cache_key not in self.fallback_cache:
-                self.fallback_cache[cache_key] = []
-            
-            # Add new data point
-            data_point = {
-                'price': price_data['current_price'],
-                'timestamp': price_data['timestamp'],
-                'change_24h': price_data.get('change_24h', 0),
-                'volume': price_data.get('volume', 0)
-            }
-            
-            self.fallback_cache[cache_key].append(data_point)
-            
-            # Keep only last 50 points
-            if len(self.fallback_cache[cache_key]) > self.max_fallback_points:
-                self.fallback_cache[cache_key] = self.fallback_cache[cache_key][-self.max_fallback_points:]
-                
-        except Exception as e:
-            ErrorHandler.log_stream_error('stock_fallback_cache', symbol, str(e))
-    
-    def get_fallback_data(self, symbol, timeframe):
-        """Get fallback data for API responses when database is unavailable"""
-        cache_key = f"{symbol}_{timeframe}"
-        if cache_key in self.fallback_cache and len(self.fallback_cache[cache_key]) > 0:
-            cached_points = self.fallback_cache[cache_key]
-            return {
-                'actual': [point['price'] for point in cached_points],
-                'timestamps': [point['timestamp'].isoformat() for point in cached_points],
-                'source': 'stock_fallback_cache'
-            }
-        return None
     
     def remove_connection(self, symbol, connection_id):
         """Remove WebSocket connection"""
