@@ -22,40 +22,47 @@ class GapFillingService:
         self.macro_symbols = list(MACRO_SYMBOLS.keys())    # 5 macro
         self.all_symbols = self.crypto_symbols + self.stock_symbols + self.macro_symbols
         
-        # Timeframes per asset type
-        self.crypto_stock_timeframes = ['1m', '5m', '15m', '1h', '4H', '1D', '7D', '1W', '1M']
+        # Only store higher timeframes - no 1m, 5m, 15m
+        self.crypto_stock_timeframes = ['1h', '4H', '1D', '7D', '1W', '1M']
         self.macro_timeframes = ['1D', '7D', '1W', '1M']
         
-        # Data requirements (1000 records for all timeframes)
-        self.monthly_records = {
-            '1m': 1000, '5m': 1000, '15m': 1000, '1h': 1000,
-            '4H': 1000, '1D': 1000, '7D': 1000, '1W': 1000, '1M': 1000
-        }
+        # Maintain exactly 1000 records per timeframe
+        self.max_records = 1000
         
         # Binance mapping for stablecoins
         self.binance_mapping = {'USDT': 'BTCUSDT', 'USDC': 'BTCUSDT'}
         self.binance_intervals = {
-            '1m': '1m', '5m': '5m', '15m': '15m', '1h': '1h',
-            '4H': '4h', '1D': '1d', '7D': '1d', '1W': '1w', '1M': '1M'
+            '1h': '1h', '4H': '4h', '1D': '1d', '7D': '1d', '1W': '1w', '1M': '1M'
         }
         
-        print(f"🚀 Monthly Data Collector initialized for {len(self.all_symbols)} assets:")
+        # Time intervals for proper data storage (avoid storing every second)
+        self.storage_intervals = {
+            '1h': timedelta(hours=1),
+            '4H': timedelta(hours=4), 
+            '1D': timedelta(days=1),
+            '7D': timedelta(days=7),
+            '1W': timedelta(weeks=1),
+            '1M': timedelta(days=30)
+        }
+        
+        print(f"🚀 Efficient Data Collector initialized for {len(self.all_symbols)} assets:")
         print(f"   📈 Crypto: {len(self.crypto_symbols)} symbols")
         print(f"   📊 Stocks: {len(self.stock_symbols)} symbols") 
         print(f"   🏛️ Macro: {len(self.macro_symbols)} symbols")
-        print(f"   ⏱️ Collecting 1 month of historical data with ML predictions")
+        print(f"   ⏱️ Timeframes: {self.crypto_stock_timeframes}")
+        print(f"   📊 Max records per timeframe: {self.max_records}")
     
     async def fill_missing_data(self, db_instance):
-        """Collect 1 month of historical data and generate ML predictions for all 25 assets"""
+        """Collect historical data efficiently with proper time intervals"""
         if not db_instance or not db_instance.pool:
-            print("❌ Monthly collection: No database available")
+            print("❌ Data collection: No database available")
             return
         
         self.db = db_instance
-        print("🚀 Starting monthly data collection with ML predictions for all 25 assets")
+        print("🚀 Starting efficient data collection for all 25 assets")
         
-        # Check database state
-        await self._clean_database()
+        # Clear database at startup to avoid conflicts
+        await self._clear_database()
         
         total_processed = 0
         total_accuracy = 0
@@ -90,9 +97,13 @@ class GapFillingService:
                         # Calculate accuracy
                         results = self._calculate_accuracy(predictions)
                         
-                        # Store data and predictions
-                        await self._store_historical_data(symbol, timeframe, data)
+                        # Store data with proper intervals and maintain record limit
+                        await self._store_historical_data_efficient(symbol, timeframe, data)
                         await self._store_predictions(symbol, timeframe, predictions, results)
+                        
+                        # Maintain record limit
+                        symbol_tf = f'{symbol}_{timeframe}'
+                        await self._maintain_record_limit(symbol_tf, timeframe)
                         
                         # Calculate accuracy stats
                         if results:
@@ -110,24 +121,39 @@ class GapFillingService:
         # Final statistics
         if total_processed > 0:
             avg_accuracy = total_accuracy / total_processed
-            print(f"🎯 Monthly collection completed: {avg_accuracy:.1f}% average accuracy")
+            print(f"🎯 Data collection completed: {avg_accuracy:.1f}% average accuracy")
             print(f"📊 Total processed: {total_processed} symbol-timeframe combinations")
         
-        print("✅ Monthly data collection with ML predictions completed!")
+        print("✅ Efficient data collection with ML predictions completed!")
     
-    async def _clean_database(self):
-        """Clean database only if explicitly needed"""
-        print("🧹 Checking database state...")
+    async def _clear_database(self):
+        """Clear database at startup to avoid conflicts"""
+        print("🧹 Clearing database at startup...")
         try:
             async with self.db.pool.acquire() as conn:
-                count = await conn.fetchval("SELECT COUNT(*) FROM actual_prices")
-                if count > 100000:  # Only clean if too much data
-                    await conn.execute("DELETE FROM actual_prices WHERE timestamp < NOW() - INTERVAL '2 months'")
-                    print(f"✅ Cleaned old data, kept recent records")
-                else:
-                    print(f"✅ Database has {count} records, no cleaning needed")
+                await conn.execute("TRUNCATE TABLE actual_prices CASCADE")
+                await conn.execute("TRUNCATE TABLE forecasts CASCADE")
+                await conn.execute("TRUNCATE TABLE forecast_accuracy CASCADE")
+                print("✅ Database cleared successfully")
         except Exception as e:
-            print(f"⚠️ Database check warning: {e}")
+            print(f"⚠️ Database clear warning: {e}")
+    
+    async def _maintain_record_limit(self, symbol_tf: str, timeframe: str):
+        """Maintain exactly 1000 records per symbol-timeframe"""
+        try:
+            async with self.db.pool.acquire() as conn:
+                # Keep only latest 1000 records
+                await conn.execute("""
+                    DELETE FROM actual_prices 
+                    WHERE symbol = $1 AND id NOT IN (
+                        SELECT id FROM actual_prices 
+                        WHERE symbol = $1 
+                        ORDER BY timestamp DESC 
+                        LIMIT $2
+                    )
+                """, symbol_tf, self.max_records)
+        except Exception as e:
+            print(f"      ⚠️ Record limit maintenance failed for {symbol_tf}: {e}")
     
     async def _get_monthly_data(self, symbol: str, timeframe: str, asset_class: str) -> List[Dict]:
         """Get 1 month of data for symbol and timeframe"""
@@ -139,11 +165,11 @@ class GapFillingService:
             return await self._get_stock_data(symbol, timeframe)
     
     async def _get_crypto_data(self, symbol: str, timeframe: str) -> List[Dict]:
-        """Get 1 month of crypto data from Binance"""
+        """Get crypto data from Binance with proper intervals"""
         for retry in range(3):
             try:
                 interval = self.binance_intervals[timeframe]
-                total_needed = self.monthly_records.get(timeframe, 720)
+                total_needed = self.max_records
                 binance_symbol = self.binance_mapping.get(symbol, f"{symbol}USDT")
                 
                 url = f"https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit={min(1000, total_needed)}"
@@ -179,17 +205,15 @@ class GapFillingService:
         return []
     
     async def _get_stock_data(self, symbol: str, timeframe: str) -> List[Dict]:
-        """Get 1 month of stock data from Yahoo Finance"""
+        """Get stock data from Yahoo Finance with proper intervals"""
         for retry in range(3):
             try:
                 range_mapping = {
-                    '1m': '7d', '5m': '60d', '15m': '60d', '1h': '730d',
-                    '4H': '730d', '1D': '2y', '7D': '2y', '1W': '5y', '1M': '10y'
+                    '1h': '730d', '4H': '730d', '1D': '2y', '7D': '2y', '1W': '5y', '1M': '10y'
                 }
                 
                 interval_mapping = {
-                    '1m': '1m', '5m': '5m', '15m': '15m', '1h': '1h',
-                    '4H': '1h', '1D': '1d', '7D': '1d', '1W': '1wk', '1M': '1mo'
+                    '1h': '1h', '4H': '1h', '1D': '1d', '7D': '1d', '1W': '1wk', '1M': '1mo'
                 }
                 
                 yahoo_interval = interval_mapping[timeframe]
@@ -221,16 +245,17 @@ class GapFillingService:
                                             'volume': float(indicators['volume'][i]) if indicators['volume'][i] else 0
                                         })
                                 
-                                # Filter to last 30 days and aggregate 4H if needed
-                                cutoff_date = datetime.now() - timedelta(days=30)
-                                filtered_data = [d for d in data if d['timestamp'] >= cutoff_date]
+                                # Take last 1000 records and aggregate if needed
+                                data = data[-self.max_records:] if len(data) > self.max_records else data
                                 
                                 if timeframe == '4H':
-                                    filtered_data = self._aggregate_to_4h(filtered_data)
+                                    data = self._aggregate_to_4h(data)
                                 elif timeframe == '7D':
-                                    filtered_data = self._aggregate_to_7d(filtered_data)
+                                    data = self._aggregate_to_7d(data)
                                 elif timeframe == '1M':
-                                    filtered_data = self._aggregate_to_1m(filtered_data)
+                                    data = self._aggregate_to_1m(data)
+                                
+                                filtered_data = data
                                 
                                 print(f"    ✅ {symbol} {timeframe}: Got {len(filtered_data)} records from Yahoo")
                                 return filtered_data
@@ -315,32 +340,32 @@ class GapFillingService:
         return aggregated
     
     async def _get_macro_data(self, symbol: str, timeframe: str) -> List[Dict]:
-        """Generate synthetic macro economic data for 1 month"""
+        """Generate synthetic macro economic data with proper intervals"""
         try:
             base_values = {
                 'GDP': 27000, 'CPI': 310.5, 'UNEMPLOYMENT': 3.7,
                 'FED_RATE': 5.25, 'CONSUMER_CONFIDENCE': 102.3
             }
             
-            total_needed = self.monthly_records.get(timeframe, 1000)
+            total_needed = self.max_records
             data = []
             base_value = base_values.get(symbol, 100)
             
+            # Generate data with proper time intervals
+            interval = self.storage_intervals.get(timeframe, timedelta(days=1))
+            
             for i in range(total_needed):
+                timestamp = datetime.now() - (interval * (total_needed - i))
+                
                 if timeframe == '1D':
-                    timestamp = datetime.now() - timedelta(days=total_needed - i)
                     variation = random.uniform(-0.002, 0.002)
                 elif timeframe == '7D':
-                    timestamp = datetime.now() - timedelta(days=(total_needed - i) * 7)
                     variation = random.uniform(-0.008, 0.008)
                 elif timeframe == '1W':
-                    timestamp = datetime.now() - timedelta(weeks=total_needed - i)
                     variation = random.uniform(-0.01, 0.01)
                 elif timeframe == '1M':
-                    timestamp = datetime.now() - timedelta(days=(total_needed - i) * 30)
                     variation = random.uniform(-0.02, 0.02)
                 else:
-                    timestamp = datetime.now() - timedelta(days=total_needed - i)
                     variation = random.uniform(-0.005, 0.005)
                 
                 current_value = base_value * (1 + variation)
@@ -517,17 +542,49 @@ class GapFillingService:
         
         return results
     
-    async def _store_historical_data(self, symbol: str, timeframe: str, data: List[Dict]):
-        """Store historical price data with conflict handling"""
+    async def _store_historical_data_efficient(self, symbol: str, timeframe: str, data: List[Dict]):
+        """Store historical data with proper time intervals - no every-second storage"""
         try:
             symbol_tf = f'{symbol}_{timeframe}'
-            async with self.db.pool.acquire() as conn:
-                for item in data:
-                    # Normalize timestamp to remove microseconds for consistency
-                    normalized_timestamp = item['timestamp'].replace(microsecond=0)
-                    if timeframe in ['1D', '1W']:
-                        normalized_timestamp = normalized_timestamp.replace(hour=0, minute=0, second=0)
+            interval = self.storage_intervals.get(timeframe, timedelta(days=1))
+            
+            # Filter data to store only at proper intervals
+            filtered_data = []
+            last_stored_time = None
+            
+            for item in sorted(data, key=lambda x: x['timestamp']):
+                current_time = item['timestamp']
+                
+                # Only store if enough time has passed based on timeframe
+                if last_stored_time is None or (current_time - last_stored_time) >= interval:
+                    # Normalize timestamp based on timeframe
+                    if timeframe == '1h':
+                        normalized_timestamp = current_time.replace(minute=0, second=0, microsecond=0)
+                    elif timeframe == '4H':
+                        hour = (current_time.hour // 4) * 4
+                        normalized_timestamp = current_time.replace(hour=hour, minute=0, second=0, microsecond=0)
+                    elif timeframe == '1D':
+                        normalized_timestamp = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+                    elif timeframe == '7D':
+                        days_since_monday = current_time.weekday()
+                        normalized_timestamp = current_time.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_since_monday)
+                    elif timeframe == '1W':
+                        days_since_monday = current_time.weekday()
+                        normalized_timestamp = current_time.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_since_monday)
+                    elif timeframe == '1M':
+                        normalized_timestamp = current_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                    else:
+                        normalized_timestamp = current_time.replace(second=0, microsecond=0)
                     
+                    filtered_data.append({
+                        **item,
+                        'timestamp': normalized_timestamp
+                    })
+                    last_stored_time = current_time
+            
+            # Store filtered data
+            async with self.db.pool.acquire() as conn:
+                for item in filtered_data:
                     await conn.execute("""
                         INSERT INTO actual_prices (symbol, timeframe, open_price, high, low, 
                                                  close_price, price, volume, timestamp)
@@ -537,7 +594,9 @@ class GapFillingService:
                             close_price = EXCLUDED.close_price,
                             volume = EXCLUDED.volume
                     """, symbol_tf, timeframe, item['open'], item['high'], item['low'],
-                         item['close'], item['close'], item['volume'], normalized_timestamp)
+                         item['close'], item['close'], item['volume'], item['timestamp'])
+            
+            print(f"    ✅ {symbol_tf}: Stored {len(filtered_data)} records (filtered from {len(data)})")
                 
         except Exception as e:
             print(f"      ❌ Error storing historical data for {symbol_tf}: {e}")
