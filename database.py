@@ -263,9 +263,9 @@ class TradingDatabase:
             return 0
     
     async def get_chart_data(self, symbol, timeframe='7D'):
-        """Get historical data for charts with enhanced Redis caching"""
-        if not self.pool:
-            return {'forecast': [], 'actual': [], 'timestamps': []}
+        """Get historical data for charts with guaranteed fallback"""
+        from utils.database_fallback import database_fallback
+        return await database_fallback.get_chart_data_with_fallback(self, symbol, timeframe)
         
         # Standardize timeframe format first
         timeframe_map = {'5m': '5m', '15m': '15m', '30m': '30m', '1h': '1h', '4h': '4H', '4H': '4H', '1D': '1D', '1W': '1W'}

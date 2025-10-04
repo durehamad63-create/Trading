@@ -362,7 +362,7 @@ def setup_routes(app: FastAPI, model, database=None):
             predicted_prices = []
             timestamps = []
             
-            # Try to get real data from database first
+            # Try database first, then fallback cache, then live API
             if db and db.pool:
                 try:
                     symbol_tf = f"{symbol}_{timeframe}"
@@ -390,6 +390,16 @@ def setup_routes(app: FastAPI, model, database=None):
                                     predicted_prices.append(record['price'] * (1 + np.random.uniform(-0.02, 0.02)))
                 except Exception:
                     pass
+            
+            # If no database data, try fallback cache from realtime service
+            if not actual_prices and realtime_service:
+                fallback_data = realtime_service.get_fallback_data(symbol, timeframe)
+                if fallback_data:
+                    actual_prices = fallback_data['actual']
+                    timestamps = fallback_data['timestamps']
+                    # Generate predictions from fallback data
+                    import numpy as np
+                    predicted_prices = [price * (1 + np.random.uniform(-0.02, 0.02)) for price in actual_prices]
             
             # Generate synthetic data if no database data
             if not actual_prices:
@@ -596,7 +606,7 @@ def setup_routes(app: FastAPI, model, database=None):
             past_prices = []
             past_timestamps = []
             
-            # Try to get real historical data from database first
+            # Try database first, then fallback cache, then live API
             if db and db.pool:
                 try:
                     symbol_tf = f"{symbol}_{timeframe}"
@@ -612,6 +622,13 @@ def setup_routes(app: FastAPI, model, database=None):
                                 past_timestamps.append(record['timestamp'].isoformat())
                 except Exception:
                     pass
+            
+            # If no database data, try fallback cache from realtime service
+            if not past_prices and realtime_service:
+                fallback_data = realtime_service.get_fallback_data(symbol, timeframe)
+                if fallback_data and len(fallback_data['actual']) >= config['past']:
+                    past_prices = fallback_data['actual'][-config['past']:]
+                    past_timestamps = fallback_data['timestamps'][-config['past']:]
             
             # Fallback to generated historical data if no database data
             if not past_prices:
