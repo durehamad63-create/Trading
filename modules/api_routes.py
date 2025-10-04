@@ -1723,28 +1723,50 @@ def setup_routes(app: FastAPI, model, database=None):
         # Immediately send initial data from fallback cache
         try:
             from utils.fallback_cache import fallback_cache
+            print(f"🔄 Getting initial data for {symbol} {timeframe}")
             initial_data = await fallback_cache.ensure_data(symbol, timeframe)
             
-            if initial_data:
+            if initial_data and len(initial_data) > 0:
+                past_prices = [point['price'] for point in initial_data]
+                past_timestamps = [point['timestamp'].isoformat() for point in initial_data]
+                
+                # Generate future predictions
+                import numpy as np
+                future_prices = []
+                future_timestamps = []
+                last_price = past_prices[-1]
+                
+                for i in range(1, 6):
+                    trend = np.random.normal(0, 0.02)
+                    future_price = last_price * (1 + trend)
+                    future_prices.append(future_price)
+                    
+                    future_time = initial_data[-1]['timestamp'] + timedelta(hours=i)
+                    future_timestamps.append(future_time.isoformat())
+                
+                all_timestamps = past_timestamps + future_timestamps
+                
                 chart_data = {
                     "type": "chart_update",
                     "symbol": symbol,
                     "timeframe": timeframe,
                     "chart": {
-                        "past": [point['price'] for point in initial_data],
-                        "future": [point['price'] * 1.01 for point in initial_data[-5:]],
-                        "timestamps": [point['timestamp'].isoformat() for point in initial_data] + 
-                                     [(initial_data[-1]['timestamp'] + timedelta(hours=i)).isoformat() for i in range(1, 6)]
+                        "past": past_prices,
+                        "future": future_prices,
+                        "timestamps": all_timestamps
                     },
-                    "current_price": initial_data[-1]['price'],
-                    "forecast_direction": "UP",
+                    "current_price": last_price,
+                    "forecast_direction": "UP" if future_prices[0] > last_price else "DOWN",
                     "confidence": 75,
+                    "data_points": len(past_prices),
                     "last_updated": datetime.now().isoformat()
                 }
                 await websocket.send_text(json.dumps(chart_data))
-                print(f"✅ Sent initial chart data for {symbol}")
+                print(f"✅ Sent initial chart data for {symbol}: {len(past_prices)} past points, price: ${last_price:.2f}")
+            else:
+                print(f"❌ No initial data available for {symbol}")
         except Exception as e:
-            print(f"❌ Failed to send initial data: {e}")
+            print(f"❌ Failed to send initial data for {symbol}: {e}")
         
         # Simplified update loop with guaranteed data
         try:
@@ -1761,6 +1783,8 @@ def setup_routes(app: FastAPI, model, database=None):
                     if fresh_data and len(fresh_data) >= 10:
                         past_data = [point['price'] for point in fresh_data]
                         timestamps = [point['timestamp'].isoformat() for point in fresh_data]
+                        
+                        print(f"🔄 Fresh data for {symbol}: {len(past_data)} points, latest: ${past_data[-1]:.2f}")
                         
                         # Generate future predictions
                         import numpy as np
@@ -1797,10 +1821,20 @@ def setup_routes(app: FastAPI, model, database=None):
                         await websocket.send_text(json.dumps(chart_update))
                         
                         if count % 10 == 0:
-                            print(f"📊 Chart update #{count} for {symbol}: {len(past_data)} past + {len(future_data)} future")
+                            print(f"📊 Chart update #{count} for {symbol}: {len(past_data)} past + {len(future_data)} future, price: ${past_data[-1]:.2f}")
                     
                 except Exception as e:
                     print(f"❌ Chart update error for {symbol}: {e}")
+                    # Send error message to client
+                    try:
+                        error_msg = {
+                            "type": "error",
+                            "symbol": symbol,
+                            "message": f"Data fetch failed: {str(e)}"
+                        }
+                        await websocket.send_text(json.dumps(error_msg))
+                    except:
+                        pass
                     
         except WebSocketDisconnect:
             print(f"📊 Chart WebSocket disconnected for {symbol}")

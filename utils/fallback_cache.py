@@ -21,7 +21,7 @@ class FallbackCache:
         self.binance_symbols = {
             'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT', 'BNB': 'BNBUSDT',
             'SOL': 'SOLUSDT', 'ADA': 'ADAUSDT', 'XRP': 'XRPUSDT',
-            'DOGE': 'DOGEUSDT', 'TRX': 'TRXUSDT'
+            'DOGE': 'DOGEUSDT', 'TRX': 'TRXUSDT', 'USDT': 'BTCUSDT', 'USDC': 'BTCUSDT'
         }
         
         self.stock_symbols = ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM']
@@ -36,18 +36,26 @@ class FallbackCache:
         """Ensure we have 50 data points for symbol/timeframe"""
         cache_key = f"{symbol}_{timeframe}"
         
-        # Check if we have enough cached data
-        if len(self.price_cache[symbol][timeframe]) >= self.max_points:
-            return self.price_cache[symbol][timeframe]
+        # Always try to fetch fresh data first for accuracy
+        print(f"🔄 Ensuring data for {symbol} {timeframe}")
         
         # Fetch fresh data from APIs
         data = await self._fetch_live_data(symbol, timeframe)
-        if data:
+        if data and len(data) >= 10:
+            print(f"✅ Got {len(data)} live data points for {symbol}")
             self.price_cache[symbol][timeframe] = data[-self.max_points:]
             return self.price_cache[symbol][timeframe]
         
+        # Check if we have cached data as fallback
+        if len(self.price_cache[symbol][timeframe]) >= 10:
+            print(f"📦 Using cached data for {symbol} ({len(self.price_cache[symbol][timeframe])} points)")
+            return self.price_cache[symbol][timeframe]
+        
         # Generate synthetic data as last resort
-        return self._generate_synthetic_data(symbol, timeframe)
+        print(f"⚠️ Using synthetic data for {symbol}")
+        synthetic_data = self._generate_synthetic_data(symbol, timeframe)
+        self.price_cache[symbol][timeframe] = synthetic_data
+        return synthetic_data
     
     async def _fetch_live_data(self, symbol: str, timeframe: str) -> List[Dict]:
         """Fetch live data from appropriate API"""
@@ -70,6 +78,7 @@ class FallbackCache:
             interval = {'1h': '1h', '4H': '4h', '1D': '1d', '1W': '1w'}.get(timeframe, '1d')
             
             url = f"https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit=50"
+            print(f"🔄 Fetching Binance data: {url}")
             
             async with session.get(url, timeout=10) as response:
                 if response.status == 200:
@@ -83,9 +92,12 @@ class FallbackCache:
                             'high': float(kline[2]),
                             'low': float(kline[3])
                         })
+                    print(f"✅ Binance data: {len(data)} points, price range: ${data[0]['price']:.2f} - ${data[-1]['price']:.2f}")
                     return data
-        except Exception:
-            pass
+                else:
+                    print(f"❌ Binance API error: {response.status}")
+        except Exception as e:
+            print(f"❌ Binance fetch error: {e}")
         return []
     
     async def _fetch_yahoo_data(self, symbol: str, timeframe: str) -> List[Dict]:
@@ -147,30 +159,45 @@ class FallbackCache:
         return list(reversed(data))
     
     def _generate_synthetic_data(self, symbol: str, timeframe: str) -> List[Dict]:
-        """Generate synthetic data as last resort"""
+        """Generate realistic synthetic data as last resort"""
         base_prices = {
-            'BTC': 43000, 'ETH': 2600, 'NVDA': 800, 'AAPL': 190,
+            'BTC': 43000, 'ETH': 2600, 'BNB': 315, 'SOL': 98, 'ADA': 0.48,
+            'XRP': 0.52, 'DOGE': 0.085, 'TRX': 0.105, 'USDT': 1.0, 'USDC': 1.0,
+            'NVDA': 800, 'AAPL': 190, 'MSFT': 380, 'GOOGL': 140, 'AMZN': 150,
             'GDP': 27000, 'CPI': 310, 'UNEMPLOYMENT': 3.7
         }
         
         base_price = base_prices.get(symbol, 100)
         data = []
         
+        print(f"⚠️ Generating synthetic data for {symbol} (base: ${base_price})")
+        
         for i in range(50):
-            timestamp = datetime.now() - timedelta(hours=i)
-            trend = np.sin(i * 0.1) * 0.02  # Sine wave trend
-            noise = np.random.normal(0, 0.01)  # Random noise
-            price = base_price * (1 + trend + noise)
+            # Create realistic price movement
+            time_factor = (50 - i) / 50  # 1.0 to 0.02
+            trend = np.sin(i * 0.2) * 0.05 * time_factor  # Decreasing volatility
+            noise = np.random.normal(0, 0.02 * time_factor)  # Random walk
+            
+            price_multiplier = 1 + trend + noise
+            price = base_price * price_multiplier
+            
+            # Ensure reasonable bounds
+            if symbol in ['USDT', 'USDC']:
+                price = max(0.99, min(1.01, price))  # Stablecoin bounds
+            else:
+                price = max(base_price * 0.8, min(base_price * 1.2, price))
+            
+            timestamp = datetime.now() - timedelta(hours=49-i)
             
             data.append({
                 'timestamp': timestamp,
-                'price': max(0.01, price),
+                'price': round(price, 8 if price < 1 else 2),
                 'volume': np.random.randint(1000000, 10000000),
-                'high': price * 1.01,
-                'low': price * 0.99
+                'high': price * (1 + abs(noise) * 0.5),
+                'low': price * (1 - abs(noise) * 0.5)
             })
         
-        return list(reversed(data))
+        return data
     
     def add_realtime_point(self, symbol: str, timeframe: str, price_data: Dict):
         """Add real-time data point and maintain 50 point limit"""
