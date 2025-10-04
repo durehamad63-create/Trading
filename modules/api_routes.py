@@ -1732,8 +1732,20 @@ def setup_routes(app: FastAPI, model, database=None):
                 initial_data = await fallback_cache.ensure_data(symbol, timeframe)
             
             if initial_data and len(initial_data) > 0:
-                past_prices = [point['price'] for point in initial_data]
-                past_timestamps = [point['timestamp'].isoformat() for point in initial_data]
+                # Chart data points based on timeframe
+                timeframe_config = {
+                    '1h': {'past': 24, 'future': 12},
+                    '1H': {'past': 24, 'future': 12},
+                    '4H': {'past': 24, 'future': 6},
+                    '1D': {'past': 30, 'future': 7},
+                    '1W': {'past': 12, 'future': 4},
+                    '1M': {'past': 30, 'future': 7}
+                }
+                config = timeframe_config.get(timeframe, {'past': 24, 'future': 6})
+                
+                # Get past data points
+                past_prices = [point['price'] for point in initial_data[-config['past']:]]
+                past_timestamps = [point['timestamp'].isoformat() for point in initial_data[-config['past']:]]
                 
                 # Generate future predictions
                 import numpy as np
@@ -1741,12 +1753,13 @@ def setup_routes(app: FastAPI, model, database=None):
                 future_timestamps = []
                 last_price = past_prices[-1]
                 
-                for i in range(1, 6):
+                time_delta = {'1h': 1, '1H': 1, '4H': 4, '1D': 24, '1W': 168, '1M': 720}.get(timeframe, 1)
+                for i in range(1, config['future'] + 1):
                     trend = np.random.normal(0, 0.02)
                     future_price = last_price * (1 + trend)
                     future_prices.append(future_price)
                     
-                    future_time = initial_data[-1]['timestamp'] + timedelta(hours=i)
+                    future_time = initial_data[-1]['timestamp'] + timedelta(hours=i * time_delta)
                     future_timestamps.append(future_time.isoformat())
                 
                 all_timestamps = past_timestamps + future_timestamps
@@ -1764,6 +1777,8 @@ def setup_routes(app: FastAPI, model, database=None):
                     "forecast_direction": "UP" if future_prices[0] > last_price else "DOWN",
                     "confidence": 75,
                     "data_points": len(past_prices),
+                "total_points": len(past_prices) + len(future_prices),
+                "config": f"{len(past_prices)} past + {len(future_prices)} future",
                     "last_updated": datetime.now().isoformat()
                 }
                 await websocket.send_text(json.dumps(chart_data))
