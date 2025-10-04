@@ -1720,11 +1720,16 @@ def setup_routes(app: FastAPI, model, database=None):
             await websocket.close(code=1000, reason=f"Unsupported symbol: {symbol}")
             return
         
-        # Immediately send initial data from fallback cache
+        # Immediately send initial data from live APIs
         try:
-            from utils.fallback_cache import fallback_cache
             print(f"🔄 Getting initial data for {symbol} {timeframe}")
-            initial_data = await fallback_cache.ensure_data(symbol, timeframe)
+            
+            if symbol == 'BTC':
+                from utils.live_data_fetcher import live_fetcher
+                initial_data = await live_fetcher.get_btc_data(timeframe)
+            else:
+                from utils.fallback_cache import fallback_cache
+                initial_data = await fallback_cache.ensure_data(symbol, timeframe)
             
             if initial_data and len(initial_data) > 0:
                 past_prices = [point['price'] for point in initial_data]
@@ -1780,9 +1785,14 @@ def setup_routes(app: FastAPI, model, database=None):
                 count += 1
                 
                 try:
-                    # Get data and send update
-                    from utils.fallback_cache import fallback_cache
-                    fresh_data = await fallback_cache.ensure_data(symbol, timeframe)
+                    # Get data directly from live APIs
+                    from utils.live_data_fetcher import live_fetcher
+                    
+                    if symbol == 'BTC':
+                        fresh_data = await live_fetcher.get_btc_data(timeframe)
+                    else:
+                        from utils.fallback_cache import fallback_cache
+                        fresh_data = await fallback_cache.ensure_data(symbol, timeframe)
                     
                     if fresh_data and len(fresh_data) >= 10:
                         past_data = [point['price'] for point in fresh_data]
