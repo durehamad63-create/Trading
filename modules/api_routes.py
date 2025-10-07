@@ -433,7 +433,7 @@ def setup_routes(app: FastAPI, model, database=None):
             accuracy_history = []
             
             # Define intervals based on timeframe
-            if timeframe == '1h':
+            if timeframe in ['1h', '1H']:
                 # Show every 5 minutes (12 points per hour)
                 step = max(1, len(actual_prices) // 12)
                 time_format = lambda ts: ts[11:16]  # HH:MM
@@ -466,8 +466,26 @@ def setup_routes(app: FastAPI, model, database=None):
                     error_pct = abs(actual - predicted) / actual * 100
                     result = 'Hit' if error_pct < 3 else 'Miss'
                     
+                    # Format timestamp based on timeframe
+                    if timeframe in ['1h', '1H']:
+                        # For 1h, show 5-minute intervals (12 points per hour)
+                        minute = (i * 5) % 60
+                        hour = 9 + (i * 5) // 60
+                        formatted_time = f"{hour:02d}:{minute:02d}"
+                    elif timeframe == '4H':
+                        # For 4H, show 30-minute intervals (8 points per 4 hours)
+                        minute = (i * 30) % 60
+                        hour = 9 + (i * 30) // 60
+                        formatted_time = f"{hour:02d}:{minute:02d}"
+                    elif timeframe == '1D':
+                        # For 1D, show hour of day (0-23)
+                        hour = i % 24
+                        formatted_time = f"{hour:02d}:00"
+                    else:
+                        formatted_time = time_format(timestamps[i])
+                    
                     accuracy_history.append({
-                        'date': time_format(timestamps[i]),
+                        'date': formatted_time,
                         'actual': round(actual, 2),
                         'predicted': round(predicted, 2),
                         'result': result,
@@ -842,10 +860,12 @@ def setup_routes(app: FastAPI, model, database=None):
     def _generate_fallback_history(timeframe):
         """Generate fallback accuracy history with timeframe-appropriate format"""
         history = []
-        if timeframe == '1h':
+        if timeframe in ['1h', '1H']:
             for i in range(12):
+                minute = (i * 5) % 60
+                hour = 9 + (i * 5) // 60
                 history.append({
-                    'date': f"{9+i//2}:{(i%2)*30:02d}",
+                    'date': f"{hour:02d}:{minute:02d}",
                     'actual': 100 + i,
                     'predicted': 102 + i,
                     'result': 'Hit' if i % 3 != 0 else 'Miss',
@@ -868,7 +888,7 @@ def setup_routes(app: FastAPI, model, database=None):
                     'predicted': 102 + i,
                     'result': 'Hit' if i % 3 != 0 else 'Miss',
                     'error_pct': 2.0
-                })
+                })[:20]  # Limit to 20 entries
         elif timeframe == '7D':
             for i in range(7):
                 history.append({
@@ -1229,13 +1249,23 @@ def setup_routes(app: FastAPI, model, database=None):
                                                         timeframe = conn_data.get('timeframe', 'trends')
                                                         break
                                             
-                                            if timeframe in ['1h', '4H', '1D']:
-                                                time_format = lambda ts: ts[11:16]  # HH:MM
+                                            # Format timestamp based on timeframe
+                                            if timeframe in ['1h', '1H']:
+                                                minute = (i * 5) % 60
+                                                hour = 9 + (i * 5) // 60
+                                                formatted_time = f"{hour:02d}:{minute:02d}"
+                                            elif timeframe == '4H':
+                                                minute = (i * 30) % 60
+                                                hour = 9 + (i * 30) // 60
+                                                formatted_time = f"{hour:02d}:{minute:02d}"
+                                            elif timeframe == '1D':
+                                                hour = i % 24
+                                                formatted_time = f"{hour:02d}:00"
                                             else:
-                                                time_format = lambda ts: ts[:10]  # YYYY-MM-DD
+                                                formatted_time = chart_data['timestamps'][i][:10]  # YYYY-MM-DD
                                             
                                             history.append({
-                                                'date': time_format(chart_data['timestamps'][i]),
+                                                'date': formatted_time,
                                                 'actual': round(actual_val, 2),
                                                 'predicted': round(pred_val, 2),
                                                 'result': result
@@ -1288,8 +1318,23 @@ def setup_routes(app: FastAPI, model, database=None):
                                     error_pct = abs(actual_val - pred_val) / actual_val * 100
                                     result = 'Hit' if error_pct < 3 else 'Miss'
                                     
+                                    # Format timestamp based on timeframe
+                                    if timeframe in ['1h', '1H']:
+                                        minute = (i * 5) % 60
+                                        hour = 9 + (i * 5) // 60
+                                        formatted_time = f"{hour:02d}:{minute:02d}"
+                                    elif timeframe == '4H':
+                                        minute = (i * 30) % 60
+                                        hour = 9 + (i * 30) // 60
+                                        formatted_time = f"{hour:02d}:{minute:02d}"
+                                    elif timeframe == '1D':
+                                        hour = i % 24
+                                        formatted_time = f"{hour:02d}:00"
+                                    else:
+                                        formatted_time = time_format(chart_data['timestamps'][i])
+                                    
                                     history.append({
-                                        'date': time_format(chart_data['timestamps'][i]),
+                                        'date': formatted_time,
                                         'actual': round(actual_val, 2),
                                         'predicted': round(pred_val, 2),
                                         'result': result
