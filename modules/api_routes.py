@@ -429,25 +429,53 @@ def setup_routes(app: FastAPI, model, database=None):
                     
                     predicted_prices.append(round(pred_price, 2))
             
-            # Generate accuracy history table
+            # Generate accuracy history table with timeframe-specific intervals
             accuracy_history = []
-            for i in range(min(10, len(actual_prices) // 5)):
-                idx = i * 5
-                if idx < len(actual_prices) and idx < len(predicted_prices):
-                    actual = actual_prices[idx]
-                    predicted = predicted_prices[idx]
+            
+            # Define intervals based on timeframe
+            if timeframe == '1h':
+                # Show every 5 minutes (12 points per hour)
+                step = max(1, len(actual_prices) // 12)
+                time_format = lambda ts: ts[11:16]  # HH:MM
+            elif timeframe == '4H':
+                # Show every 30 minutes (8 points per 4 hours)
+                step = max(1, len(actual_prices) // 8)
+                time_format = lambda ts: ts[11:16]  # HH:MM
+            elif timeframe == '1D':
+                # Show hourly (24 points per day)
+                step = max(1, len(actual_prices) // 24)
+                time_format = lambda ts: ts[11:16]  # HH:MM
+            elif timeframe == '7D':
+                # Show daily (7 points per week)
+                step = max(1, len(actual_prices) // 7)
+                time_format = lambda ts: ts[:10]  # YYYY-MM-DD
+            elif timeframe == '1M':
+                # Show weekly (4 points per month)
+                step = max(1, len(actual_prices) // 4)
+                time_format = lambda ts: ts[:10]  # YYYY-MM-DD
+            else:
+                step = max(1, len(actual_prices) // 10)
+                time_format = lambda ts: ts[:10]  # YYYY-MM-DD
+            
+            for i in range(0, len(actual_prices), step):
+                if i < len(actual_prices) and i < len(predicted_prices):
+                    actual = actual_prices[i]
+                    predicted = predicted_prices[i]
                     
                     # Calculate if prediction was accurate (within 3%)
                     error_pct = abs(actual - predicted) / actual * 100
                     result = 'Hit' if error_pct < 3 else 'Miss'
                     
                     accuracy_history.append({
-                        'date': timestamps[idx][:10],
+                        'date': time_format(timestamps[i]),
                         'actual': round(actual, 2),
                         'predicted': round(predicted, 2),
                         'result': result,
                         'error_pct': round(error_pct, 1)
                     })
+            
+            # Limit to reasonable number of points
+            accuracy_history = accuracy_history[:20]
             
             return {
                 'symbol': symbol,
@@ -500,10 +528,8 @@ def setup_routes(app: FastAPI, model, database=None):
                     'predicted': predicted_prices,
                     'timestamps': timestamps
                 },
-                'accuracy_history': [
-                    {'date': '2024-01-01', 'actual': 100, 'predicted': 102, 'result': 'Hit', 'error_pct': 2.0},
-                    {'date': '2024-01-02', 'actual': 105, 'predicted': 103, 'result': 'Hit', 'error_pct': 1.9}
-                ],
+                # Generate fallback history with timeframe-appropriate format
+                'accuracy_history': self._generate_fallback_history(timeframe),
                 'prediction_confidence': 75,
                 'market_volatility': 1.0
             }
@@ -813,6 +839,61 @@ def setup_routes(app: FastAPI, model, database=None):
             await asyncio.gather(*tasks, return_exceptions=True)
     
     # Helper function for accuracy metrics
+    def _generate_fallback_history(timeframe):
+        """Generate fallback accuracy history with timeframe-appropriate format"""
+        history = []
+        if timeframe == '1h':
+            for i in range(12):
+                history.append({
+                    'date': f"{9+i//2}:{(i%2)*30:02d}",
+                    'actual': 100 + i,
+                    'predicted': 102 + i,
+                    'result': 'Hit' if i % 3 != 0 else 'Miss',
+                    'error_pct': 2.0
+                })
+        elif timeframe == '4H':
+            for i in range(8):
+                history.append({
+                    'date': f"{9+i//2}:{(i%2)*30:02d}",
+                    'actual': 100 + i*2,
+                    'predicted': 102 + i*2,
+                    'result': 'Hit' if i % 3 != 0 else 'Miss',
+                    'error_pct': 2.0
+                })
+        elif timeframe == '1D':
+            for i in range(24):
+                history.append({
+                    'date': f"{i:02d}:00",
+                    'actual': 100 + i,
+                    'predicted': 102 + i,
+                    'result': 'Hit' if i % 3 != 0 else 'Miss',
+                    'error_pct': 2.0
+                })
+        elif timeframe == '7D':
+            for i in range(7):
+                history.append({
+                    'date': f"2024-01-{i+1:02d}",
+                    'actual': 100 + i*5,
+                    'predicted': 102 + i*5,
+                    'result': 'Hit' if i % 3 != 0 else 'Miss',
+                    'error_pct': 2.0
+                })
+        elif timeframe == '1M':
+            for i in range(4):
+                history.append({
+                    'date': f"2024-01-{i*7+1:02d}",
+                    'actual': 100 + i*10,
+                    'predicted': 102 + i*10,
+                    'result': 'Hit' if i % 3 != 0 else 'Miss',
+                    'error_pct': 2.0
+                })
+        else:
+            history = [
+                {'date': '2024-01-01', 'actual': 100, 'predicted': 102, 'result': 'Hit', 'error_pct': 2.0},
+                {'date': '2024-01-02', 'actual': 105, 'predicted': 103, 'result': 'Hit', 'error_pct': 1.9}
+            ]
+        return history
+    
     async def get_accuracy_metrics(symbol: str):
         """Get accuracy metrics for trends WebSocket"""
         try:
@@ -1140,8 +1221,21 @@ def setup_routes(app: FastAPI, model, database=None):
                                             error_pct = abs(actual_val - pred_val) / actual_val * 100
                                             result = 'Hit' if error_pct < 3 else 'Miss'
                                             
+                                            # Get timeframe from connection for proper formatting
+                                            timeframe = 'trends'
+                                            if symbol in manager.active_connections:
+                                                for conn_data in manager.active_connections[symbol].values():
+                                                    if 'timeframe' in conn_data:
+                                                        timeframe = conn_data.get('timeframe', 'trends')
+                                                        break
+                                            
+                                            if timeframe in ['1h', '4H', '1D']:
+                                                time_format = lambda ts: ts[11:16]  # HH:MM
+                                            else:
+                                                time_format = lambda ts: ts[:10]  # YYYY-MM-DD
+                                            
                                             history.append({
-                                                'date': chart_data['timestamps'][i][:10],
+                                                'date': time_format(chart_data['timestamps'][i]),
                                                 'actual': round(actual_val, 2),
                                                 'predicted': round(pred_val, 2),
                                                 'result': result
@@ -1167,19 +1261,39 @@ def setup_routes(app: FastAPI, model, database=None):
                             chart_data['predicted'].reverse()
                             chart_data['timestamps'].reverse()
                             
-                            # Generate history from synthetic data
-                            for i in range(0, 20, 5):
-                                actual_val = chart_data['actual'][i]
-                                pred_val = chart_data['predicted'][i]
-                                error_pct = abs(actual_val - pred_val) / actual_val * 100
-                                result = 'Hit' if error_pct < 3 else 'Miss'
-                                
-                                history.append({
-                                    'date': chart_data['timestamps'][i][:10],
-                                    'actual': round(actual_val, 2),
-                                    'predicted': round(pred_val, 2),
-                                    'result': result
-                                })
+                            # Generate history from synthetic data with timeframe-specific intervals
+                            if timeframe == '1h':
+                                step = max(1, len(chart_data['actual']) // 12)
+                                time_format = lambda ts: ts[11:16]  # HH:MM
+                            elif timeframe == '4H':
+                                step = max(1, len(chart_data['actual']) // 8)
+                                time_format = lambda ts: ts[11:16]  # HH:MM
+                            elif timeframe == '1D':
+                                step = max(1, len(chart_data['actual']) // 24)
+                                time_format = lambda ts: ts[11:16]  # HH:MM
+                            elif timeframe == '7D':
+                                step = max(1, len(chart_data['actual']) // 7)
+                                time_format = lambda ts: ts[:10]  # YYYY-MM-DD
+                            elif timeframe == '1M':
+                                step = max(1, len(chart_data['actual']) // 4)
+                                time_format = lambda ts: ts[:10]  # YYYY-MM-DD
+                            else:
+                                step = 5
+                                time_format = lambda ts: ts[:10]  # YYYY-MM-DD
+                            
+                            for i in range(0, min(len(chart_data['actual']), 20), step):
+                                if i < len(chart_data['actual']) and i < len(chart_data['predicted']):
+                                    actual_val = chart_data['actual'][i]
+                                    pred_val = chart_data['predicted'][i]
+                                    error_pct = abs(actual_val - pred_val) / actual_val * 100
+                                    result = 'Hit' if error_pct < 3 else 'Miss'
+                                    
+                                    history.append({
+                                        'date': time_format(chart_data['timestamps'][i]),
+                                        'actual': round(actual_val, 2),
+                                        'predicted': round(pred_val, 2),
+                                        'result': result
+                                    })
                         
                         trends_data = {
                             "type": "trends_update",
