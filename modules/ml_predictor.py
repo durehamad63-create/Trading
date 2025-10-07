@@ -240,8 +240,11 @@ class MobileMLModel:
             # Real ML prediction
             xgb_prediction = self.xgb_model.predict(features.reshape(1, -1))[0]
             
-            # Add realistic market noise to prevent flat predictions
-            market_noise = np.random.normal(0, 0.008)  # 0.8% noise
+            # Add time-based variation to prevent static predictions
+            import time
+            time_seed = int(time.time()) % 1000
+            np.random.seed(time_seed)  # Change seed based on time
+            market_noise = np.random.normal(0, 0.015)  # Increased noise for 1D
             xgb_prediction += market_noise
             
             predicted_price = current_price * (1 + xgb_prediction)
@@ -281,8 +284,8 @@ class MobileMLModel:
                 'data_source': data_source
             }
             
-            # Cache using centralized manager with hot symbol priority
-            ttl = 5 if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else 10
+            # Cache using centralized manager with hot symbol priority - SHORTER TTL for 1D
+            ttl = 1 if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else 3  # Much shorter cache
             self.cache_manager.set_cache(cache_key, result, ttl)
             
             # Cache the result in memory

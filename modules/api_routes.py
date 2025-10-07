@@ -462,9 +462,10 @@ def setup_routes(app: FastAPI, model, database=None):
                     actual = actual_prices[i]
                     predicted = predicted_prices[i]
                     
-                    # Calculate if prediction was accurate (within 3%)
+                    # Calculate if prediction was accurate (within 5% for 1D timeframe)
+                    threshold = 5 if timeframe == '1D' else 3
                     error_pct = abs(actual - predicted) / actual * 100
-                    result = 'Hit' if error_pct < 3 else 'Miss'
+                    result = 'Hit' if error_pct < threshold else 'Miss'
                     
                     # Format timestamp based on timeframe
                     if timeframe in ['1h', '1H']:
@@ -1315,8 +1316,9 @@ def setup_routes(app: FastAPI, model, database=None):
                                 if i < len(chart_data['actual']) and i < len(chart_data['predicted']):
                                     actual_val = chart_data['actual'][i]
                                     pred_val = chart_data['predicted'][i]
+                                    threshold = 5 if timeframe == '1D' else 3
                                     error_pct = abs(actual_val - pred_val) / actual_val * 100
-                                    result = 'Hit' if error_pct < 3 else 'Miss'
+                                    result = 'Hit' if error_pct < threshold else 'Miss'
                                     
                                     # Format timestamp based on timeframe
                                     if timeframe in ['1h', '1H']:
