@@ -526,7 +526,7 @@ def setup_routes(app: FastAPI, model, database=None):
                         })
             
             elif timeframe == '1M':
-                # Weekly intervals: Week 1, Week 2, Week 3, Week 4
+                # Weekly intervals with dates: Oct 01, Oct 08, Oct 15, Oct 22
                 num_points = min(len(actual_prices), 4)
                 step = max(1, len(actual_prices) // num_points)
                 for idx, i in enumerate(range(0, len(actual_prices), step)[:num_points]):
@@ -536,7 +536,8 @@ def setup_routes(app: FastAPI, model, database=None):
                         error_pct = abs(actual - predicted) / actual * 100
                         result = 'Hit' if error_pct < 5 else 'Miss'
                         
-                        formatted_time = f"Week {idx+1}"
+                        date = datetime.now() - timedelta(days=30 - (idx * 7))
+                        formatted_time = date.strftime("%b %d")
                         
                         accuracy_history.append({
                             'date': formatted_time,
