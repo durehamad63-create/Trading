@@ -432,69 +432,140 @@ def setup_routes(app: FastAPI, model, database=None):
             # Generate accuracy history table with timeframe-specific intervals
             accuracy_history = []
             
-            # Define intervals based on timeframe
+            # Define intervals and formatting based on timeframe
             if timeframe in ['1h', '1H']:
-                # Show every 5 minutes (12 points per hour)
-                step = max(1, len(actual_prices) // 12)
-                time_format = lambda ts: ts[11:16]  # HH:MM
+                # 30-minute intervals: 09:30, 10:00, 10:30...
+                num_points = min(len(actual_prices), 12)  # Up to 12 points (6 hours)
+                step = max(1, len(actual_prices) // num_points)
+                for idx, i in enumerate(range(0, len(actual_prices), step)[:num_points]):
+                    if i < len(actual_prices) and i < len(predicted_prices):
+                        actual = actual_prices[i]
+                        predicted = predicted_prices[i]
+                        error_pct = abs(actual - predicted) / actual * 100
+                        result = 'Hit' if error_pct < 3 else 'Miss'
+                        
+                        # 30-minute intervals starting from 09:00
+                        total_minutes = idx * 30
+                        hour = 9 + (total_minutes // 60)
+                        minute = total_minutes % 60
+                        formatted_time = f"{hour:02d}:{minute:02d}"
+                        
+                        accuracy_history.append({
+                            'date': formatted_time,
+                            'actual': round(actual, 2),
+                            'predicted': round(predicted, 2),
+                            'result': result,
+                            'error_pct': round(error_pct, 1)
+                        })
+            
             elif timeframe == '4H':
-                # Show every 30 minutes (8 points per 4 hours)
-                step = max(1, len(actual_prices) // 8)
-                time_format = lambda ts: ts[11:16]  # HH:MM
-            elif timeframe == '1D':
-                # Show hourly (24 points per day)
-                step = max(1, len(actual_prices) // 24)
-                time_format = lambda ts: ts[11:16]  # HH:MM
-            elif timeframe == '7D':
-                # Show daily (7 points per week)
-                step = max(1, len(actual_prices) // 7)
-                time_format = lambda ts: ts[:10]  # YYYY-MM-DD
-            elif timeframe == '1M':
-                # Show weekly (4 points per month)
-                step = max(1, len(actual_prices) // 4)
-                time_format = lambda ts: ts[:10]  # YYYY-MM-DD
-            else:
-                step = max(1, len(actual_prices) // 10)
-                time_format = lambda ts: ts[:10]  # YYYY-MM-DD
-            
-            for i in range(0, len(actual_prices), step):
-                if i < len(actual_prices) and i < len(predicted_prices):
-                    actual = actual_prices[i]
-                    predicted = predicted_prices[i]
-                    
-                    # Calculate if prediction was accurate (within 5% for 1D timeframe)
-                    threshold = 5 if timeframe == '1D' else 3
-                    error_pct = abs(actual - predicted) / actual * 100
-                    result = 'Hit' if error_pct < threshold else 'Miss'
-                    
-                    # Format timestamp based on timeframe
-                    if timeframe in ['1h', '1H']:
-                        # For 1h, show 5-minute intervals (12 points per hour)
-                        minute = (i * 5) % 60
-                        hour = 9 + (i * 5) // 60
-                        formatted_time = f"{hour:02d}:{minute:02d}"
-                    elif timeframe == '4H':
-                        # For 4H, show 30-minute intervals (8 points per 4 hours)
-                        minute = (i * 30) % 60
-                        hour = 9 + (i * 30) // 60
-                        formatted_time = f"{hour:02d}:{minute:02d}"
-                    elif timeframe == '1D':
-                        # For 1D, show hour of day (0-23)
-                        hour = i % 24
+                # 1-hour intervals: 09:00, 10:00, 11:00...
+                num_points = min(len(actual_prices), 12)  # Up to 12 hours
+                step = max(1, len(actual_prices) // num_points)
+                for idx, i in enumerate(range(0, len(actual_prices), step)[:num_points]):
+                    if i < len(actual_prices) and i < len(predicted_prices):
+                        actual = actual_prices[i]
+                        predicted = predicted_prices[i]
+                        error_pct = abs(actual - predicted) / actual * 100
+                        result = 'Hit' if error_pct < 3 else 'Miss'
+                        
+                        hour = 9 + idx
                         formatted_time = f"{hour:02d}:00"
-                    else:
-                        formatted_time = time_format(timestamps[i])
-                    
-                    accuracy_history.append({
-                        'date': formatted_time,
-                        'actual': round(actual, 2),
-                        'predicted': round(predicted, 2),
-                        'result': result,
-                        'error_pct': round(error_pct, 1)
-                    })
+                        
+                        accuracy_history.append({
+                            'date': formatted_time,
+                            'actual': round(actual, 2),
+                            'predicted': round(predicted, 2),
+                            'result': result,
+                            'error_pct': round(error_pct, 1)
+                        })
             
-            # Limit to reasonable number of points
-            accuracy_history = accuracy_history[:20]
+            elif timeframe == '1D':
+                # 4-hour intervals: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00
+                intervals = [0, 4, 8, 12, 16, 20]
+                num_points = min(len(actual_prices), len(intervals))
+                step = max(1, len(actual_prices) // num_points)
+                for idx, i in enumerate(range(0, len(actual_prices), step)[:num_points]):
+                    if i < len(actual_prices) and i < len(predicted_prices):
+                        actual = actual_prices[i]
+                        predicted = predicted_prices[i]
+                        error_pct = abs(actual - predicted) / actual * 100
+                        result = 'Hit' if error_pct < 5 else 'Miss'
+                        
+                        hour = intervals[idx] if idx < len(intervals) else (idx * 4) % 24
+                        formatted_time = f"{hour:02d}:00"
+                        
+                        accuracy_history.append({
+                            'date': formatted_time,
+                            'actual': round(actual, 2),
+                            'predicted': round(predicted, 2),
+                            'result': result,
+                            'error_pct': round(error_pct, 1)
+                        })
+            
+            elif timeframe == '7D':
+                # Daily intervals: Oct 01, Oct 02, ..., Oct 07
+                num_points = min(len(actual_prices), 7)
+                step = max(1, len(actual_prices) // num_points)
+                for idx, i in enumerate(range(0, len(actual_prices), step)[:num_points]):
+                    if i < len(actual_prices) and i < len(predicted_prices):
+                        actual = actual_prices[i]
+                        predicted = predicted_prices[i]
+                        error_pct = abs(actual - predicted) / actual * 100
+                        result = 'Hit' if error_pct < 5 else 'Miss'
+                        
+                        date = datetime.now() - timedelta(days=7-idx)
+                        formatted_time = date.strftime("%b %d")
+                        
+                        accuracy_history.append({
+                            'date': formatted_time,
+                            'actual': round(actual, 2),
+                            'predicted': round(predicted, 2),
+                            'result': result,
+                            'error_pct': round(error_pct, 1)
+                        })
+            
+            elif timeframe == '1M':
+                # Weekly intervals: Week 1, Week 2, Week 3, Week 4
+                num_points = min(len(actual_prices), 4)
+                step = max(1, len(actual_prices) // num_points)
+                for idx, i in enumerate(range(0, len(actual_prices), step)[:num_points]):
+                    if i < len(actual_prices) and i < len(predicted_prices):
+                        actual = actual_prices[i]
+                        predicted = predicted_prices[i]
+                        error_pct = abs(actual - predicted) / actual * 100
+                        result = 'Hit' if error_pct < 5 else 'Miss'
+                        
+                        formatted_time = f"Week {idx+1}"
+                        
+                        accuracy_history.append({
+                            'date': formatted_time,
+                            'actual': round(actual, 2),
+                            'predicted': round(predicted, 2),
+                            'result': result,
+                            'error_pct': round(error_pct, 1)
+                        })
+            
+            else:
+                # Default: use timestamps from data
+                num_points = min(len(actual_prices), 10)
+                step = max(1, len(actual_prices) // num_points)
+                for i in range(0, len(actual_prices), step)[:num_points]:
+                    if i < len(actual_prices) and i < len(predicted_prices):
+                        actual = actual_prices[i]
+                        predicted = predicted_prices[i]
+                        error_pct = abs(actual - predicted) / actual * 100
+                        result = 'Hit' if error_pct < 5 else 'Miss'
+                        
+                        formatted_time = timestamps[i][:10] if i < len(timestamps) else f"Point {i+1}"
+                        
+                        accuracy_history.append({
+                            'date': formatted_time,
+                            'actual': round(actual, 2),
+                            'predicted': round(predicted, 2),
+                            'result': result,
+                            'error_pct': round(error_pct, 1)
+                        })
             
             return {
                 'symbol': symbol,
@@ -548,7 +619,7 @@ def setup_routes(app: FastAPI, model, database=None):
                     'timestamps': timestamps
                 },
                 # Generate fallback history with timeframe-appropriate format
-                'accuracy_history': self._generate_fallback_history(timeframe),
+                'accuracy_history': [],  # Will be generated from synthetic data below
                 'prediction_confidence': 75,
                 'market_volatility': 1.0
             }
@@ -857,63 +928,7 @@ def setup_routes(app: FastAPI, model, database=None):
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
     
-    # Helper function for accuracy metrics
-    def _generate_fallback_history(timeframe):
-        """Generate fallback accuracy history with timeframe-appropriate format"""
-        history = []
-        if timeframe in ['1h', '1H']:
-            for i in range(12):
-                minute = (i * 5) % 60
-                hour = 9 + (i * 5) // 60
-                history.append({
-                    'date': f"{hour:02d}:{minute:02d}",
-                    'actual': 100 + i,
-                    'predicted': 102 + i,
-                    'result': 'Hit' if i % 3 != 0 else 'Miss',
-                    'error_pct': 2.0
-                })
-        elif timeframe == '4H':
-            for i in range(8):
-                history.append({
-                    'date': f"{9+i//2}:{(i%2)*30:02d}",
-                    'actual': 100 + i*2,
-                    'predicted': 102 + i*2,
-                    'result': 'Hit' if i % 3 != 0 else 'Miss',
-                    'error_pct': 2.0
-                })
-        elif timeframe == '1D':
-            for i in range(24):
-                history.append({
-                    'date': f"{i:02d}:00",
-                    'actual': 100 + i,
-                    'predicted': 102 + i,
-                    'result': 'Hit' if i % 3 != 0 else 'Miss',
-                    'error_pct': 2.0
-                })[:20]  # Limit to 20 entries
-        elif timeframe == '7D':
-            for i in range(7):
-                history.append({
-                    'date': f"2024-01-{i+1:02d}",
-                    'actual': 100 + i*5,
-                    'predicted': 102 + i*5,
-                    'result': 'Hit' if i % 3 != 0 else 'Miss',
-                    'error_pct': 2.0
-                })
-        elif timeframe == '1M':
-            for i in range(4):
-                history.append({
-                    'date': f"2024-01-{i*7+1:02d}",
-                    'actual': 100 + i*10,
-                    'predicted': 102 + i*10,
-                    'result': 'Hit' if i % 3 != 0 else 'Miss',
-                    'error_pct': 2.0
-                })
-        else:
-            history = [
-                {'date': '2024-01-01', 'actual': 100, 'predicted': 102, 'result': 'Hit', 'error_pct': 2.0},
-                {'date': '2024-01-02', 'actual': 105, 'predicted': 103, 'result': 'Hit', 'error_pct': 1.9}
-            ]
-        return history
+    # Helper function for accuracy metrics - removed, logic moved inline
     
     async def get_accuracy_metrics(symbol: str):
         """Get accuracy metrics for trends WebSocket"""
