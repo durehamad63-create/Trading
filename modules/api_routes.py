@@ -324,6 +324,7 @@ def setup_routes(app: FastAPI, model, database=None):
     @app.get("/api/asset/{symbol}/trends")
     async def asset_trends(symbol: str, timeframe: str = "7D", view: str = "chart"):
         """Get historical trends and accuracy with 50 points of actual vs prediction data"""
+        print(f"🔍 DEBUG TRENDS: Starting trends API for {symbol} with timeframe {timeframe}")
         try:
             # Get prediction for accuracy calculation
             prediction = await model.predict(symbol)

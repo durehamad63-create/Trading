@@ -77,8 +77,6 @@ class RealTimeWebSocketService:
                 cache_key = self.cache_keys.price(symbol, 'crypto')
                 self.cache_manager.set_cache(cache_key, self.price_cache[symbol], ttl=30)
             
-            print(f"✅ Initial cache populated with {len(self.price_cache)} symbols")
-            
         except Exception as e:
             print(f"❌ Initial cache population failed: {e}")
     
@@ -329,11 +327,13 @@ class RealTimeWebSocketService:
                         predicted_price = float(cached_pred.get('predicted_price', current_price))
                         forecast_direction = cached_pred.get('forecast_direction', 'HOLD')
                         confidence = cached_pred.get('confidence', 75)
+                        print(f"🔮 Using cached prediction for {symbol}: ${predicted_price:.2f} ({forecast_direction})")
                 else:
+                    print(f"🔄 No cached prediction for {symbol}, generating fresh prediction")
                     # Generate fresh prediction in background (non-blocking)
                     asyncio.create_task(self._generate_fresh_prediction(symbol))
             except Exception as e:
-                pass
+                print(f"❌ Prediction cache error for {symbol}: {e}")
             
             # Send real-time price update (for live chart updates)
             realtime_data = {
@@ -376,10 +376,14 @@ class RealTimeWebSocketService:
             
             # Generate and store forecast for this timeframe
             try:
-                prediction = await self.model.predict(symbol.split('_')[0])  # Remove timeframe from symbol
+                base_symbol = symbol.split('_')[0]  # Remove timeframe from symbol
+                print(f"🔮 Generating prediction for {base_symbol} (timeframe: {timeframe})")
+                prediction = await self.model.predict(base_symbol)
+                print(f"📊 Prediction generated for {base_symbol}: {prediction.get('predicted_price', 'N/A')}")
                 await db.store_forecast(symbol, prediction)
+                print(f"💾 Forecast stored in DB for {symbol}")
             except Exception as e:
-                pass
+                print(f"❌ Prediction/storage failed for {symbol}: {e}")
                 
         except Exception as e:
             ErrorHandler.log_database_error('store_realtime', symbol, str(e))
@@ -536,11 +540,11 @@ class RealTimeWebSocketService:
             ]
             
             for attempt, query_symbol in enumerate(query_attempts):
-                print(f"📊 DB Query attempt {attempt+1}: {query_symbol}")
+                print(f"📊 TREND API: DB Query attempt {attempt+1}: {query_symbol} (timeframe: {timeframe})")
                 try:
                     chart_data = await db.get_chart_data(query_symbol, timeframe)
                     if chart_data and chart_data.get('actual') and chart_data.get('forecast'):
-                        print(f"✅ Found data: {len(chart_data['actual'])} actual, {len(chart_data['forecast'])} forecast")
+                        print(f"✅ TREND API: Found historical data - {len(chart_data['actual'])} actual, {len(chart_data['forecast'])} forecast points")
                         
                         # Process successful data
                         min_length = min(len(chart_data['actual']), len(chart_data['forecast']), len(chart_data['timestamps']))
@@ -549,9 +553,10 @@ class RealTimeWebSocketService:
                         actual_data = [float(x) for x in chart_data['actual'][-points:]]
                         forecast_data = [float(x) for x in chart_data['forecast'][-points:]]
                         timestamps = [str(x) for x in chart_data['timestamps'][-points:]]
+                        print(f"📈 TREND API: Using {points} data points for {symbol} chart")
                         break
                 except Exception as e:
-                    print(f"❌ Query {attempt+1} failed: {e}")
+                    print(f"❌ TREND API: Query {attempt+1} failed for {query_symbol}: {e}")
                     continue
             
             # If no database data, generate from current price
@@ -666,10 +671,12 @@ class RealTimeWebSocketService:
     async def _generate_fresh_prediction(self, symbol):
         """Generate fresh ML prediction in background"""
         try:
+            print(f"🤖 Generating fresh ML prediction for {symbol}")
             prediction = await self.model.predict(symbol)
+            print(f"✅ Fresh prediction generated for {symbol}: ${prediction.get('predicted_price', 'N/A'):.2f}")
             # Cache will be updated by model.predict() method
         except Exception as e:
-            pass
+            print(f"❌ Fresh prediction failed for {symbol}: {e}")
     
     async def _fallback_data_fetcher(self):
         """Fallback data fetcher for symbols without active WebSocket streams"""

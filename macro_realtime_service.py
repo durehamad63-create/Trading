@@ -92,9 +92,6 @@ class MacroRealtimeService:
                     # Cache using centralized manager
                     cache_key = self.cache_keys.price(symbol, 'macro')
                     self.cache_manager.set_cache(cache_key, cache_data, ttl=300)  # 5 min cache for FRED data
-    
-                    
-                    # Macro updates (logging removed)
                     
                     # Store data for all timeframes if connections exist
                     if symbol in self.active_connections and self.active_connections[symbol]:

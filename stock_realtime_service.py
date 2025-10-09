@@ -101,10 +101,6 @@ class StockRealtimeService:
                 # Cache using centralized manager
                 cache_key = self.cache_keys.price(symbol, 'stock')
                 self.cache_manager.set_cache(cache_key, cache_data, ttl=30)
-
-                
-
-                
                 # Always store data for all timeframes (regardless of connections)
                 asyncio.create_task(self._store_stock_data_all_timeframes(symbol, price_data))
                 
