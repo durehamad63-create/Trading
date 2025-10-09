@@ -404,47 +404,7 @@ def setup_routes(app: FastAPI, model, database=None):
                 except Exception:
                     pass
             
-            # Generate synthetic data if no database data
-            if not actual_prices:
-                import numpy as np
-                
-                # Time intervals based on timeframe
-                time_intervals = {
-                    '1h': timedelta(hours=1), '1H': timedelta(hours=1),
-                    '4H': timedelta(hours=4), '1D': timedelta(days=1),
-                    '7D': timedelta(days=7), '1W': timedelta(weeks=1),
-                    '1M': timedelta(days=30), '1Y': timedelta(days=365), '5Y': timedelta(days=1825)
-                }
-                
-                interval = time_intervals.get(timeframe, timedelta(days=1))
-                
-                for i in range(50):
-                    # Generate timestamp
-                    timestamp = datetime.now() - interval * (49 - i)
-                    timestamps.append(timestamp.isoformat())
-                    
-                    # ✅ FIXED: Use deterministic seed for consistent data
-                    import hashlib
-                    seed = int(hashlib.md5(f"{symbol}_{timeframe}".encode()).hexdigest()[:8], 16)
-                    np.random.seed(seed)
-                    # Generate realistic price movement
-                    trend = np.sin(i * 0.1) * 0.02  # Sine wave trend
-                    noise = np.random.normal(0, 0.015)  # Random noise
-                    price_change = trend + noise
-                    
-                    actual_price = current_price * (1 + price_change * (i / 50))
-                    actual_prices.append(round(actual_price, 2))
-                    
-                    # Generate prediction with some accuracy
-                    prediction_accuracy = accuracy / 100
-                    if np.random.random() < prediction_accuracy:
-                        # Accurate prediction (within 2%)
-                        pred_price = actual_price * (1 + np.random.uniform(-0.02, 0.02))
-                    else:
-                        # Inaccurate prediction (larger deviation)
-                        pred_price = actual_price * (1 + np.random.uniform(-0.08, 0.08))
-                    
-                    predicted_prices.append(round(pred_price, 2))
+
             
             # Generate accuracy history table with timeframe-specific intervals
             accuracy_history = []
@@ -600,50 +560,19 @@ def setup_routes(app: FastAPI, model, database=None):
             }
             
         except Exception as e:
-            # Fallback with synthetic data
-            import numpy as np
-            
-            fallback_accuracies = {
-                '1h': 72.0, '1H': 72.0, '4H': 76.0, '1D': 80.0,
-                '7D': 82.0, '1W': 82.0, '1M': 85.0, '1Y': 88.0, '5Y': 90.0
-            }
-            
-            base_acc = fallback_accuracies.get(timeframe, 75.0)
-            
-            # Generate fallback chart data
-            actual_prices = []
-            predicted_prices = []
-            timestamps = []
-            
-            # ✅ FIXED: Use deterministic seed for consistent fallback data
-            import hashlib
-            seed = int(hashlib.md5(f"{symbol}_{timeframe}_fallback".encode()).hexdigest()[:8], 16)
-            np.random.seed(seed)
-            for i in range(50):
-                timestamp = datetime.now() - timedelta(hours=i)
-                timestamps.append(timestamp.isoformat())
-                
-                price = 100 * (1 + np.random.uniform(-0.05, 0.05))
-                actual_prices.append(round(price, 2))
-                predicted_prices.append(round(price * (1 + np.random.uniform(-0.03, 0.03)), 2))
-            
-            actual_prices.reverse()
-            predicted_prices.reverse()
-            timestamps.reverse()
-            
             return {
                 'symbol': symbol,
                 'timeframe': timeframe,
-                'overall_accuracy': base_acc,
+                'overall_accuracy': 0.0,
                 'chart': {
-                    'actual': actual_prices,
-                    'predicted': predicted_prices,
-                    'timestamps': timestamps
+                    'actual': [],
+                    'predicted': [],
+                    'timestamps': []
                 },
-                # Generate fallback history with timeframe-appropriate format
-                'accuracy_history': [],  # Will be generated from synthetic data below
-                'prediction_confidence': 75,
-                'market_volatility': 1.0
+                'accuracy_history': [],
+                'prediction_confidence': 0,
+                'market_volatility': 0.0,
+                'error': 'No historical data available'
             }
 
     @app.get("/api/assets/search")
@@ -1311,77 +1240,7 @@ def setup_routes(app: FastAPI, model, database=None):
                         except Exception:
                             pass
                         
-                        # Generate synthetic data if no database data
-                        if not chart_data['actual']:
-                            import numpy as np
-                            base_price = 50000 if symbol == 'BTC' else 100
-                            
-                            # ✅ FIXED: Use deterministic seed for consistent synthetic data
-                            import hashlib
-                            seed = int(hashlib.md5(f"{symbol}_trends".encode()).hexdigest()[:8], 16)
-                            np.random.seed(seed)
-                            for i in range(50):
-                                timestamp = datetime.now() - timedelta(hours=i)
-                                price = base_price * (1 + np.random.uniform(-0.05, 0.05))
-                                pred_price = price * (1 + np.random.uniform(-0.03, 0.03))
-                                
-                                chart_data['actual'].append(round(price, 2))
-                                chart_data['predicted'].append(round(pred_price, 2))
-                                chart_data['timestamps'].append(timestamp.isoformat())
-                            
-                            chart_data['actual'].reverse()
-                            chart_data['predicted'].reverse()
-                            chart_data['timestamps'].reverse()
-                            
-                            # Generate history from synthetic data with timeframe-specific intervals
-                            if timeframe == '1h':
-                                step = max(1, len(chart_data['actual']) // 12)
-                                time_format = lambda ts: ts[11:16]  # HH:MM
-                            elif timeframe == '4H':
-                                step = max(1, len(chart_data['actual']) // 8)
-                                time_format = lambda ts: ts[11:16]  # HH:MM
-                            elif timeframe == '1D':
-                                step = max(1, len(chart_data['actual']) // 24)
-                                time_format = lambda ts: ts[11:16]  # HH:MM
-                            elif timeframe == '7D':
-                                step = max(1, len(chart_data['actual']) // 7)
-                                time_format = lambda ts: ts[:10]  # YYYY-MM-DD
-                            elif timeframe == '1M':
-                                step = max(1, len(chart_data['actual']) // 4)
-                                time_format = lambda ts: ts[:10]  # YYYY-MM-DD
-                            else:
-                                step = 5
-                                time_format = lambda ts: ts[:10]  # YYYY-MM-DD
-                            
-                            for i in range(0, min(len(chart_data['actual']), 20), step):
-                                if i < len(chart_data['actual']) and i < len(chart_data['predicted']):
-                                    actual_val = chart_data['actual'][i]
-                                    pred_val = chart_data['predicted'][i]
-                                    threshold = 5 if timeframe == '1D' else 3
-                                    error_pct = abs(actual_val - pred_val) / actual_val * 100
-                                    result = 'Hit' if error_pct < threshold else 'Miss'
-                                    
-                                    # Format timestamp based on timeframe
-                                    if timeframe in ['1h', '1H']:
-                                        minute = (i * 5) % 60
-                                        hour = 9 + (i * 5) // 60
-                                        formatted_time = f"{hour:02d}:{minute:02d}"
-                                    elif timeframe == '4H':
-                                        minute = (i * 30) % 60
-                                        hour = 9 + (i * 30) // 60
-                                        formatted_time = f"{hour:02d}:{minute:02d}"
-                                    elif timeframe == '1D':
-                                        hour = i % 24
-                                        formatted_time = f"{hour:02d}:00"
-                                    else:
-                                        formatted_time = time_format(chart_data['timestamps'][i])
-                                    
-                                    history.append({
-                                        'date': formatted_time,
-                                        'actual': round(actual_val, 2),
-                                        'predicted': round(pred_val, 2),
-                                        'result': result
-                                    })
+
                         
                         trends_data = {
                             "type": "trends_update",
