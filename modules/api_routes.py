@@ -1144,7 +1144,7 @@ def setup_routes(app: FastAPI, model, database=None):
             
             while True:
                 try:
-                    if hasattr(websocket, 'client_state') and websocket.client_state.name == 'CONNECTED':
+                    try:
                         
                         # Use same accuracy calculation as API endpoint
                         try:
@@ -1274,7 +1274,7 @@ def setup_routes(app: FastAPI, model, database=None):
                         # Update connection state
                         await manager.update_connection_state(symbol, connection_id, last_ping=datetime.now())
                         ping_failures = 0
-                    else:
+                    except:
                         break
                         
                 except Exception:
@@ -1840,20 +1840,8 @@ def setup_routes(app: FastAPI, model, database=None):
             while connection_active:
                 count += 1
                 
-                # Check connection state more reliably
-                try:
-                    if hasattr(websocket, 'client_state'):
-                        if websocket.client_state.name != 'CONNECTED':
-                            print(f"🔌 Connection closed for {symbol}")
-                            connection_active = False
-                            break
-                    else:
-                        # Fallback check by trying to send ping
-                        await websocket.send_text(json.dumps({"type": "ping"}))
-                except Exception as e:
-                    print(f"🔌 Connection check failed for {symbol}: {e}")
-                    connection_active = False
-                    break
+                # Skip connection state checks that cause immediate disconnects
+                pass
                 
                 await asyncio.sleep(2)  # Faster updates for better responsiveness
                 
@@ -2140,14 +2128,9 @@ def setup_routes(app: FastAPI, model, database=None):
                     "target_range": f"${range_min:.2f}-${range_max:.2f}"
                 }
                 
-                # Check connection state before sending
+                # Send data without state checks
                 try:
-                    if hasattr(websocket, 'client_state') and websocket.client_state.name == 'CONNECTED':
-                        await websocket.send_text(json.dumps(chart_data))
-                    else:
-                        print(f"🔌 Connection not ready for {symbol}")
-                        connection_active = False
-                        break
+                    await websocket.send_text(json.dumps(chart_data))
                 except Exception as send_error:
                     print(f"📡 Send failed for {symbol}: {send_error}")
                     connection_active = False
