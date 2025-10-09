@@ -1806,11 +1806,19 @@ def setup_routes(app: FastAPI, model, database=None):
         consistent_forecast_timestamps = None
         last_prediction_time = None
         last_used_timeframe = current_timeframe
+        # Register this websocket with the ConnectionManager so timeframe changes can update state
+        connection_id = None
+        try:
+            connection_id = await manager.get_or_create_connection(websocket, symbol, current_timeframe)
+            print(f"\u2705 Chart connection manager created ID: {connection_id}")
+        except Exception as e:
+            print(f"\u274c Failed to register chart connection with manager: {e}")
         
         try:
             # Message handler for timeframe changes
             async def handle_client_messages():
-                nonlocal current_timeframe, connection_active, force_update
+                # `config` is reassigned on timeframe change so mark it nonlocal too
+                nonlocal current_timeframe, connection_active, force_update, config
                 try:
                     async for message in websocket.iter_text():
                         try:
@@ -1822,11 +1830,14 @@ def setup_routes(app: FastAPI, model, database=None):
                                     current_timeframe = new_timeframe
                                     config = timeframe_intervals.get(current_timeframe, {'past': 30, 'future': 7, 'update_seconds': 1440})
                                     force_update = True
-                                    
-                                    # Update connection timeframe in manager
-                                    if symbol in manager.active_connections and connection_id in manager.active_connections[symbol]:
-                                        manager.active_connections[symbol][connection_id]['timeframe'] = current_timeframe
-                                        print(f"⚙️ Updated connection timeframe to {current_timeframe}")
+                                    # Update connection timeframe in manager safely
+                                    try:
+                                        if connection_id is not None:
+                                            await manager.update_connection_state(symbol, connection_id, timeframe=current_timeframe)
+                                            print(f"⚙️ Updated connection timeframe to {current_timeframe}")
+                                    except Exception:
+                                        # Non-fatal: continue without manager update
+                                        pass
                         except json.JSONDecodeError:
                             pass
                 except Exception as msg_error:
@@ -2154,6 +2165,13 @@ def setup_routes(app: FastAPI, model, database=None):
                     await message_task
                 except asyncio.CancelledError:
                     pass
+            # Ensure manager removes this connection for safe cleanup
+            try:
+                if connection_id is not None:
+                    await manager.safe_disconnect(websocket, symbol, connection_id)
+                    print(f"\u2705 Manager safe_disconnect completed for {symbol} ({connection_id})")
+            except Exception:
+                pass
     
     @app.websocket("/ws/mobile")
     async def deprecated_mobile_websocket(websocket: WebSocket):
