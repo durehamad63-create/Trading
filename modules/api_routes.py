@@ -387,7 +387,12 @@ def setup_routes(app: FastAPI, model, database=None):
                                 if i < len(pred_data):
                                     predicted_prices.append(float(pred_data[i]['predicted_price']))
                                 else:
-                                    predicted_prices.append(record['price'] * (1 + np.random.uniform(-0.02, 0.02)))
+                                    # ✅ FIXED: Use ML model prediction instead of random
+                                    try:
+                                        ml_pred = await model.predict(symbol)
+                                        predicted_prices.append(float(ml_pred.get('predicted_price', record['price'])))
+                                    except:
+                                        predicted_prices.append(float(record['price']))
                 except Exception:
                     pass
             
@@ -410,6 +415,10 @@ def setup_routes(app: FastAPI, model, database=None):
                     timestamp = datetime.now() - interval * (49 - i)
                     timestamps.append(timestamp.isoformat())
                     
+                    # ✅ FIXED: Use deterministic seed for consistent data
+                    import hashlib
+                    seed = int(hashlib.md5(f"{symbol}_{timeframe}".encode()).hexdigest()[:8], 16)
+                    np.random.seed(seed)
                     # Generate realistic price movement
                     trend = np.sin(i * 0.1) * 0.02  # Sine wave trend
                     noise = np.random.normal(0, 0.015)  # Random noise
@@ -598,6 +607,10 @@ def setup_routes(app: FastAPI, model, database=None):
             predicted_prices = []
             timestamps = []
             
+            # ✅ FIXED: Use deterministic seed for consistent fallback data
+            import hashlib
+            seed = int(hashlib.md5(f"{symbol}_{timeframe}_fallback".encode()).hexdigest()[:8], 16)
+            np.random.seed(seed)
             for i in range(50):
                 timestamp = datetime.now() - timedelta(hours=i)
                 timestamps.append(timestamp.isoformat())
@@ -1295,6 +1308,10 @@ def setup_routes(app: FastAPI, model, database=None):
                             import numpy as np
                             base_price = 50000 if symbol == 'BTC' else 100
                             
+                            # ✅ FIXED: Use deterministic seed for consistent synthetic data
+                            import hashlib
+                            seed = int(hashlib.md5(f"{symbol}_trends".encode()).hexdigest()[:8], 16)
+                            np.random.seed(seed)
                             for i in range(50):
                                 timestamp = datetime.now() - timedelta(hours=i)
                                 price = base_price * (1 + np.random.uniform(-0.05, 0.05))
