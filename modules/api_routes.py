@@ -1776,6 +1776,7 @@ def setup_routes(app: FastAPI, model, database=None):
         # Connection state for timeframe switching
         current_timeframe = timeframe
         connection_active = True
+        force_update = False
         
         # Validate symbol
         all_symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX',
@@ -1808,7 +1809,7 @@ def setup_routes(app: FastAPI, model, database=None):
         try:
             # Message handler for timeframe changes
             async def handle_client_messages():
-                nonlocal current_timeframe, connection_active
+                nonlocal current_timeframe, connection_active, force_update
                 try:
                     async for message in websocket.iter_text():
                         try:
@@ -1818,6 +1819,7 @@ def setup_routes(app: FastAPI, model, database=None):
                                 if new_timeframe != current_timeframe:
                                     print(f"🔄 Timeframe change: {current_timeframe} -> {new_timeframe}")
                                     current_timeframe = new_timeframe
+                                    force_update = True
                         except json.JSONDecodeError:
                             pass
                 except Exception as msg_error:
@@ -1895,14 +1897,16 @@ def setup_routes(app: FastAPI, model, database=None):
                     consistent_forecast_line is None or 
                     last_prediction_time is None or
                     timeframe_changed or
+                    force_update or
                     (current_time - last_prediction_time).total_seconds() >= config['update_seconds']
                 )
                 
-                # Reset cache if timeframe changed
-                if timeframe_changed:
+                # Reset cache if timeframe changed or forced
+                if timeframe_changed or force_update:
                     consistent_forecast_line = None
                     consistent_forecast_timestamps = None
                     last_prediction_time = None
+                    force_update = False
                 
                 if should_update_prediction:
                     # Generate new consistent forecast line
