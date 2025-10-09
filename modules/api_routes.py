@@ -911,6 +911,20 @@ def setup_routes(app: FastAPI, model, database=None):
         Returns True on success, False on failure.
         """
         try:
+            # If the underlying websocket has a client_state attribute, check it first to avoid ASGI send-after-close
+            try:
+                if hasattr(websocket, 'client_state') and websocket.client_state.name != 'CONNECTED':
+                    # Not connected - remove tracked connection
+                    if symbol and connection_id:
+                        try:
+                            await manager.safe_disconnect(websocket, symbol, connection_id)
+                        except Exception:
+                            pass
+                    return False
+            except Exception:
+                # If accessing client_state fails, proceed to try send and catch any exception
+                pass
+
             await websocket.send_text(message)
             return True
         except Exception as e:
