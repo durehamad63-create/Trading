@@ -1773,11 +1773,22 @@ def setup_routes(app: FastAPI, model, database=None):
         await websocket.accept()
         print(f"📊 Enhanced chart WebSocket connected for {symbol} ({timeframe})")
         
+        # Chart data array lengths as specified
+        timeframe_intervals = {
+            '1h': {'past': 24, 'future': 12, 'update_seconds': 60},
+            '1H': {'past': 24, 'future': 12, 'update_seconds': 60},
+            '4H': {'past': 24, 'future': 6, 'update_seconds': 240},
+            '1D': {'past': 30, 'future': 7, 'update_seconds': 1440},
+            '7D': {'past': 12, 'future': 4, 'update_seconds': 10080},
+            '1W': {'past': 12, 'future': 4, 'update_seconds': 10080},
+            '1M': {'past': 30, 'future': 7, 'update_seconds': 43200}
+        }
+        
         # Connection state for timeframe switching
         current_timeframe = timeframe
         connection_active = True
         force_update = False
-        config = timeframe_intervals.get(current_timeframe, {'past': 30, 'future': 1, 'update_seconds': 1440})
+        config = timeframe_intervals.get(current_timeframe, {'past': 30, 'future': 7, 'update_seconds': 1440})
         
         # Validate symbol
         all_symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX',
@@ -1788,16 +1799,7 @@ def setup_routes(app: FastAPI, model, database=None):
             await websocket.close(code=1000, reason=f"Unsupported symbol: {symbol}")
             return
         
-        # Chart data array lengths as specified
-        timeframe_intervals = {
-            '1h': {'past': 24, 'future': 12, 'update_seconds': 60},    # 36 total points
-            '1H': {'past': 24, 'future': 12, 'update_seconds': 60},    # 36 total points
-            '4H': {'past': 24, 'future': 6, 'update_seconds': 240},    # 30 total points
-            '1D': {'past': 30, 'future': 7, 'update_seconds': 1440},   # 37 total points
-            '7D': {'past': 12, 'future': 4, 'update_seconds': 10080},  # 16 total points
-            '1W': {'past': 12, 'future': 4, 'update_seconds': 10080},  # 16 total points
-            '1M': {'past': 30, 'future': 7, 'update_seconds': 43200}   # 37 total points
-        }
+
         
         # Store consistent forecast line
         consistent_forecast_line = None
