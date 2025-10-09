@@ -1846,7 +1846,7 @@ def setup_routes(app: FastAPI, model, database=None):
         
 
         
-        # Store consistent forecast line
+        # Store consistent forecast line (nonlocal for message handler)
         consistent_forecast_line = None
         consistent_forecast_timestamps = None
         last_prediction_time = None
@@ -1862,27 +1862,30 @@ def setup_routes(app: FastAPI, model, database=None):
         try:
             # Message handler for timeframe changes
             async def handle_client_messages():
-                # `config` is reassigned on timeframe change so mark it nonlocal too
-                nonlocal current_timeframe, connection_active, force_update, config
+                nonlocal current_timeframe, connection_active, force_update, config, consistent_forecast_line, consistent_forecast_timestamps, last_prediction_time
                 try:
                     async for message in websocket.iter_text():
                         try:
                             data = json.loads(message)
                             if data.get('type') == 'change_timeframe':
                                 new_timeframe = data.get('timeframe', current_timeframe)
-                                if new_timeframe != current_timeframe:
-                                    print(f"🔄 Timeframe change: {current_timeframe} -> {new_timeframe}")
+                                if new_timeframe != current_timeframe and new_timeframe in timeframe_intervals:
+                                    print(f"🔄 Timeframe change via WebSocket: {current_timeframe} -> {new_timeframe}")
                                     current_timeframe = new_timeframe
                                     config = timeframe_intervals.get(current_timeframe, {'past': 30, 'future': 7, 'update_seconds': 1440})
                                     force_update = True
-                                    # Update connection timeframe in manager safely
-                                    try:
-                                        if connection_id is not None:
-                                            await manager.update_connection_state(symbol, connection_id, timeframe=current_timeframe)
-                                            print(f"⚙️ Updated connection timeframe to {current_timeframe}")
-                                    except Exception:
-                                        # Non-fatal: continue without manager update
-                                        pass
+                                    # Reset forecast cache for new timeframe
+                                    consistent_forecast_line = None
+                                    consistent_forecast_timestamps = None
+                                    last_prediction_time = None
+                                    # Send immediate confirmation
+                                    await websocket.send_text(json.dumps({
+                                        "type": "timeframe_changed",
+                                        "timeframe": current_timeframe,
+                                        "timestamp": datetime.now().isoformat()
+                                    }))
+                                    if connection_id is not None:
+                                        await manager.update_connection_state(symbol, connection_id, timeframe=current_timeframe)
                         except json.JSONDecodeError:
                             pass
                 except Exception as msg_error:
@@ -2003,9 +2006,10 @@ def setup_routes(app: FastAPI, model, database=None):
                 
                 # Reset cache if timeframe changed or forced
                 if timeframe_changed or force_update:
-                    consistent_forecast_line = None
-                    consistent_forecast_timestamps = None
-                    last_prediction_time = None
+                    if not force_update:  # Only reset if not already reset in message handler
+                        consistent_forecast_line = None
+                        consistent_forecast_timestamps = None
+                        last_prediction_time = None
                     config = timeframe_intervals.get(current_timeframe, {'past': 30, 'future': 7, 'update_seconds': 1440})
                     force_update = False
                     print(f"🔄 Cache reset for timeframe {current_timeframe}")
