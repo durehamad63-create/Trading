@@ -1817,10 +1817,6 @@ def setup_routes(app: FastAPI, model, database=None):
                                 if new_timeframe != current_timeframe:
                                     print(f"🔄 Timeframe change: {current_timeframe} -> {new_timeframe}")
                                     current_timeframe = new_timeframe
-                                    # Reset forecast cache for new timeframe
-                                    consistent_forecast_line = None
-                                    consistent_forecast_timestamps = None
-                                    last_prediction_time = None
                         except json.JSONDecodeError:
                             pass
                 except Exception as msg_error:
@@ -1886,13 +1882,27 @@ def setup_routes(app: FastAPI, model, database=None):
                     await asyncio.sleep(1)
                     continue
                 
-                # Use consistent forecast line
+                # Use consistent forecast line - reset if timeframe changed
                 current_time = datetime.now()
+                # Track previous timeframe to detect changes
+                if not hasattr(enhanced_chart_websocket, 'prev_timeframe'):
+                    enhanced_chart_websocket.prev_timeframe = current_timeframe
+                
+                timeframe_changed = enhanced_chart_websocket.prev_timeframe != current_timeframe
+                enhanced_chart_websocket.prev_timeframe = current_timeframe
+                
                 should_update_prediction = (
                     consistent_forecast_line is None or 
                     last_prediction_time is None or
+                    timeframe_changed or
                     (current_time - last_prediction_time).total_seconds() >= config['update_seconds']
                 )
+                
+                # Reset cache if timeframe changed
+                if timeframe_changed:
+                    consistent_forecast_line = None
+                    consistent_forecast_timestamps = None
+                    last_prediction_time = None
                 
                 if should_update_prediction:
                     # Generate new consistent forecast line
