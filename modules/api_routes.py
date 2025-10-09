@@ -1823,7 +1823,8 @@ def setup_routes(app: FastAPI, model, database=None):
                                     last_prediction_time = None
                         except json.JSONDecodeError:
                             pass
-                except Exception:
+                except Exception as msg_error:
+                    print(f"📨 Message handler error: {msg_error}")
                     connection_active = False
             
             # Start message handler
@@ -1882,6 +1883,7 @@ def setup_routes(app: FastAPI, model, database=None):
                 
                 # Skip if no real data available
                 if not past_prices:
+                    await asyncio.sleep(1)
                     continue
                 
                 # Use consistent forecast line
@@ -2066,7 +2068,17 @@ def setup_routes(app: FastAPI, model, database=None):
                     "target_range": f"${range_min:.2f}-${range_max:.2f}"
                 }
                 
-                await websocket.send_text(json.dumps(chart_data))
+                # Check connection state before sending
+                try:
+                    if hasattr(websocket, 'client_state') and websocket.client_state.name == 'CONNECTED':
+                        await websocket.send_text(json.dumps(chart_data))
+                    else:
+                        connection_active = False
+                        break
+                except Exception as send_error:
+                    print(f"📡 Send failed for {symbol}: {send_error}")
+                    connection_active = False
+                    break
                 
                 if count % 10 == 0:
                     print(f"📊 Chart update #{count} for {symbol}: {len(past_prices)} past + {len(future_prices)} future points")
