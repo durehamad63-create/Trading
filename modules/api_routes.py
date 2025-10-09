@@ -831,26 +831,14 @@ def setup_routes(app: FastAPI, model, database=None):
         async def safe_disconnect(self, websocket: WebSocket, symbol: str, connection_id: str):
             """Efficient cleanup with user session management"""
             try:
-                user_id = id(websocket)
-                
-                if symbol in self.active_connections:
-                    async with self.connection_locks.get(symbol, asyncio.Lock()):
-                        if connection_id in self.active_connections[symbol]:
-                            del self.active_connections[symbol][connection_id]
+                if symbol in self.active_connections and connection_id in self.active_connections[symbol]:
+                    del self.active_connections[symbol][connection_id]
+                    
+                    # Clean up empty symbol entries
+                    if not self.active_connections[symbol]:
+                        del self.active_connections[symbol]
                         
-                        # Clean up empty symbol entries
-                        if not self.active_connections[symbol]:
-                            del self.active_connections[symbol]
-                            if symbol in self.connection_locks:
-                                del self.connection_locks[symbol]
-                
-                # Clean up user session
-                if user_id in self.user_sessions:
-                    self.user_sessions[user_id]['connections'].discard(connection_id)
-                    if not self.user_sessions[user_id]['connections']:
-                        del self.user_sessions[user_id]
-                        
-            except Exception as e:
+            except Exception:
                 pass
         
         async def graceful_reconnect(self, websocket: WebSocket, symbol: str, connection_id: str):
@@ -906,35 +894,17 @@ def setup_routes(app: FastAPI, model, database=None):
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def safe_send_ws(websocket: WebSocket, message: str, symbol: str = None, connection_id: str = None) -> bool:
-        """Helper to send over websocket and remove connection on failure.
-
-        Returns True on success, False on failure.
-        """
+        """Helper to send over websocket and remove connection on failure."""
         try:
-            # If the underlying websocket has a client_state attribute, check it first to avoid ASGI send-after-close
-            try:
-                if hasattr(websocket, 'client_state') and websocket.client_state.name != 'CONNECTED':
-                    # Not connected - remove tracked connection
-                    if symbol and connection_id:
-                        try:
-                            await manager.safe_disconnect(websocket, symbol, connection_id)
-                        except Exception:
-                            pass
+            # Check if websocket is still connected
+            if hasattr(websocket, 'client_state'):
+                if websocket.client_state.name != 'CONNECTED':
                     return False
-            except Exception:
-                # If accessing client_state fails, proceed to try send and catch any exception
-                pass
-
+            
             await websocket.send_text(message)
             return True
-        except Exception as e:
-            print(f"Send failed (safe_send_ws): {e}")
-            # If this websocket is tracked by manager, try to remove it
-            if symbol and connection_id:
-                try:
-                    await manager.safe_disconnect(websocket, symbol, connection_id)
-                except Exception:
-                    pass
+        except Exception:
+            # Silent failure - connection will be cleaned up elsewhere
             return False
     
     # Helper function for accuracy metrics - removed, logic moved inline
@@ -2188,11 +2158,9 @@ def setup_routes(app: FastAPI, model, database=None):
                     "target_range": f"${range_min:.2f}-${range_max:.2f}"
                 }
                 
-                # Send data without state checks
-                try:
-                    await websocket.send_text(json.dumps(chart_data))
-                except Exception as send_error:
-                    print(f"📡 Send failed for {symbol}: {send_error}")
+                # Send data with safe sending
+                sent_ok = await safe_send_ws(websocket, json.dumps(chart_data), symbol, connection_id)
+                if not sent_ok:
                     connection_active = False
                     break
                 
