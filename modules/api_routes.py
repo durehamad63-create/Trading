@@ -127,7 +127,7 @@ def setup_routes(app: FastAPI, model, database=None):
         try:
             # Get class parameter from query string to avoid Python keyword conflict
             class_param = request.query_params.get('class', 'crypto') if request else 'crypto'
-            print(f"📊 MARKET SUMMARY API: class='{class_param}', limit={limit}")
+            logging.info("Market summary request: class=%s, limit=%s", class_param, limit)
             crypto_symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX']
             stock_symbols = ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM']
             macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
@@ -175,7 +175,7 @@ def setup_routes(app: FastAPI, model, database=None):
             # Get data based on class filter
             
             if class_param == "crypto":
-                print(f"📊 MARKET SUMMARY: Processing {len(crypto_symbols[:limit])} crypto symbols - checking cache vs API")
+                logging.debug("Processing %s crypto symbols for market summary", len(crypto_symbols[:limit]))
                 for symbol in crypto_symbols[:limit]:
                     # Try cache first
                     cache_key = cache_keys.price(symbol, 'crypto')
@@ -211,10 +211,10 @@ def setup_routes(app: FastAPI, model, database=None):
                             'data_source': 'Live API',
                             'asset_class': 'crypto'
                         })
-                print(f"📊 CRYPTO RESULT: {len(assets)} assets (cache: {sum(1 for s in crypto_symbols[:limit] if realtime_service and s in realtime_service.price_cache)}, API: {len(assets) - sum(1 for s in crypto_symbols[:limit] if realtime_service and s in realtime_service.price_cache)})")
+                logging.debug("Crypto result: %s assets", len(assets))
             
             elif class_param == "stocks":
-                print(f"📊 MARKET SUMMARY: Processing {len(stock_symbols[:limit])} stock symbols - checking cache vs API")
+                logging.debug("Processing %s stock symbols for market summary", len(stock_symbols[:limit]))
                 for symbol in stock_symbols[:limit]:
                     cache_key = cache_keys.price(symbol, 'stock')
                     price_data = cache_manager.get_cache(cache_key)
@@ -236,10 +236,10 @@ def setup_routes(app: FastAPI, model, database=None):
                             'data_source': price_data.get('data_source', 'Stock API'),
                             'asset_class': 'stocks'
                         })
-                print(f"📊 STOCK RESULT: {len(assets)} assets (cache: {sum(1 for s in stock_symbols[:limit] if stock_realtime_service and s in stock_realtime_service.price_cache)}, API: {len(assets) - sum(1 for s in stock_symbols[:limit] if stock_realtime_service and s in stock_realtime_service.price_cache)})")
+                logging.debug("Stock result: %s assets", len(assets))
             
             elif class_param == "macro":
-                print(f"📊 MARKET SUMMARY: Processing {len(macro_symbols)} macro symbols - checking cache vs synthetic")
+                logging.debug("Processing %s macro symbols for market summary", len(macro_symbols))
                 
                 for symbol in macro_symbols:
                     cache_key = cache_keys.price(symbol, 'macro')
@@ -274,7 +274,7 @@ def setup_routes(app: FastAPI, model, database=None):
                         })
                 
                 cached_count = sum(1 for s in macro_symbols if macro_realtime_service and hasattr(macro_realtime_service, 'price_cache') and s in macro_realtime_service.price_cache)
-                print(f"📊 MACRO RESULT: {len(assets)} assets (cached: {cached_count}, synthetic: {len(assets) - cached_count})")
+                logging.debug("Macro result: %s assets (cached: %s)", len(assets), cached_count)
             
             else:  # "all" case
                 # Add crypto assets (exclude stablecoins)
@@ -325,7 +325,7 @@ def setup_routes(app: FastAPI, model, database=None):
         
             return {"assets": assets}
         except Exception as e:
-            print(f"❌ Market summary error: {e}")
+            logging.error("Market summary error: %s", e)
             return {"assets": [], "error": str(e)}
 
     @app.get("/api/asset/{symbol}/trends")
@@ -796,11 +796,11 @@ def setup_routes(app: FastAPI, model, database=None):
         
         async def get_or_create_connection(self, websocket: WebSocket, symbol: str, timeframe: str):
             """Simple connection creation"""
-            print(f"🔧 Creating connection for {symbol}")
+            logging.debug("Creating connection for %s", symbol)
             try:
                 user_id = id(websocket)
                 connection_key = f"{symbol}_{timeframe}_{user_id}"
-                print(f"🔑 Connection key: {connection_key}")
+                logging.debug("Connection key: %s", connection_key)
                 
                 if symbol not in self.active_connections:
                     self.active_connections[symbol] = {}
@@ -813,7 +813,7 @@ def setup_routes(app: FastAPI, model, database=None):
                     'timeframe': timeframe,
                     'connected_at': datetime.now()
                 }
-                print(f"✅ Connection stored for {symbol}")
+                logging.debug("Connection stored for %s", symbol)
                 
                 return connection_key
             except Exception as e:
@@ -1017,7 +1017,7 @@ def setup_routes(app: FastAPI, model, database=None):
         
         # Use connection manager for better connection handling
         try:
-            print(f"🔧 Creating connection manager entry for {symbol}", flush=True)
+            logging.debug("Creating connection manager entry for %s", symbol)
             sys.stdout.flush()
             connection_id = await manager.get_or_create_connection(websocket, symbol, timeframe)
             print(f"✅ Connection manager created ID: {connection_id}", flush=True)
@@ -1102,7 +1102,7 @@ def setup_routes(app: FastAPI, model, database=None):
                         }
                         sent_ok = await safe_send_ws(websocket, json.dumps(realtime_data), symbol, connection_id)
                         if ping_count % 10 == 0 and sent_ok:  # Log every 10th update
-                            print(f"📡 Update #{ping_count}: {symbol} = ${current_price:.2f}")
+                            logging.debug("Price update #%s: %s = $%.2f", ping_count, symbol, current_price)
                     else:
                         # Send ping if no price data
                         ping_data = {
@@ -1816,7 +1816,7 @@ def setup_routes(app: FastAPI, model, database=None):
     async def enhanced_chart_websocket(websocket: WebSocket, symbol: str, timeframe: str = "1D"):
         """Enhanced chart WebSocket with timeframe switching support"""
         await websocket.accept()
-        print(f"📊 Enhanced chart WebSocket connected for {symbol} ({timeframe})")
+        logging.debug("Enhanced chart WebSocket connected for %s (%s)", symbol, timeframe)
         
         # Chart data array lengths as specified
         timeframe_intervals = {
@@ -1855,7 +1855,7 @@ def setup_routes(app: FastAPI, model, database=None):
         connection_id = None
         try:
             connection_id = await manager.get_or_create_connection(websocket, symbol, current_timeframe)
-            print(f"\u2705 Chart connection manager created ID: {connection_id}")
+            logging.debug("Chart connection manager created ID: %s", connection_id)
         except Exception as e:
             print(f"\u274c Failed to register chart connection with manager: {e}")
         
@@ -1926,15 +1926,15 @@ def setup_routes(app: FastAPI, model, database=None):
                 
                 # Get real historical data from database for all timeframes
                 if not db:
-                    print(f"❌ DB Debug: Database instance is None for {symbol}")
+                    logging.debug("DB Debug: Database instance is None for %s", symbol)
                 elif not db.pool:
-                    print(f"❌ DB Debug: Database pool is None for {symbol}")
+                    logging.debug("DB Debug: Database pool is None for %s", symbol)
                 else:
                     try:
                         # Try both timeframe formats (1h and 1H)
                         symbol_tf_formats = [f"{symbol}_{current_timeframe}", f"{symbol}_{current_timeframe.lower()}"]
                         historical_data = None
-                        print(f"🔍 DB Debug: Querying {symbol_tf_formats} for {config['past']} records")
+                        logging.debug("DB Debug: Querying %s for %s records", symbol_tf_formats, config.get('past'))
                         
                         async with db.pool.acquire() as conn:
                             for symbol_tf in symbol_tf_formats:
@@ -1942,7 +1942,7 @@ def setup_routes(app: FastAPI, model, database=None):
                                     "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT $2",
                                     symbol_tf, config['past']
                                 )
-                                print(f"🔍 DB Debug: Query {symbol_tf} returned {len(historical_data) if historical_data else 0} records")
+                                logging.debug("DB Debug: Query %s returned %s records", symbol_tf, len(historical_data) if historical_data else 0)
                                 if historical_data:
                                     break
                             
@@ -1950,16 +1950,16 @@ def setup_routes(app: FastAPI, model, database=None):
                                 for record in reversed(historical_data):
                                     past_prices.append(float(record['price']))
                                     past_timestamps.append(record['timestamp'].isoformat())
-                                print(f"✅ DB Debug: Loaded {len(past_prices)} historical prices for {symbol}")
+                                logging.debug("DB Debug: Loaded %s historical prices for %s", len(past_prices), symbol)
                             else:
-                                print(f"⚠️ DB Debug: No historical data found for {symbol} in any format")
+                                logging.debug("DB Debug: No historical data found for %s in any format", symbol)
                     except Exception as e:
-                        print(f"❌ DB Debug: Database error for {symbol}_{current_timeframe}: {e}")
-                        print(f"❌ DB Debug: Exception type: {type(e).__name__}")
+                        logging.debug("DB Debug: Database error for %s_%s: %s", symbol, current_timeframe, e)
+                        logging.debug("DB Debug: Exception type: %s", type(e).__name__)
                 
                 # Generate fallback data if no database data
                 if not past_prices:
-                    print(f"🔄 DB Debug: Generating {config['past']} fallback prices for {symbol} {current_timeframe}")
+                    logging.debug("DB Debug: Generating %s fallback prices for %s %s", config.get('past'), symbol, current_timeframe)
                     for i in range(config['past']):
                         if current_timeframe in ['1h', '1H']:
                             time_offset = timedelta(hours=config['past'] - i)
@@ -1983,14 +1983,14 @@ def setup_routes(app: FastAPI, model, database=None):
                         
                         past_prices.append(round(historical_price, 2))
                         past_timestamps.append(timestamp.isoformat())
-                    print(f"✅ DB Debug: Generated {len(past_prices)} fallback prices for {symbol}")
+                    logging.debug("DB Debug: Generated %s fallback prices for %s", len(past_prices), symbol)
                 
                 # Use consistent forecast line - reset if timeframe changed
                 current_time = datetime.now()
                 # Detect timeframe changes
                 timeframe_changed = last_used_timeframe != current_timeframe
                 if timeframe_changed:
-                    print(f"🔄 DB Debug: Timeframe changed from {last_used_timeframe} to {current_timeframe} - Config: {config}")
+                    logging.debug("DB Debug: Timeframe changed from %s to %s - Config: %s", last_used_timeframe, current_timeframe, config)
                     last_used_timeframe = current_timeframe
                 
                 should_update_prediction = (
@@ -2013,7 +2013,7 @@ def setup_routes(app: FastAPI, model, database=None):
                 if should_update_prediction:
                     # Generate new consistent forecast line
                     last_prediction_time = current_time
-                    print(f"🔮 DB Debug: Generating consistent forecast for {symbol} ({config['future']} points) - TF: {current_timeframe}")
+                    logging.debug("DB Debug: Generating consistent forecast for %s (%s points) - TF: %s", symbol, config.get('future'), current_timeframe)
                 
                     # Generate realistic forecast line that blends smoothly from historical data
                     import hashlib
@@ -2193,7 +2193,7 @@ def setup_routes(app: FastAPI, model, database=None):
                     break
                 
                 if count % 10 == 0:
-                    print(f"📊 DB Debug: Chart update #{count} for {symbol} {current_timeframe}: {len(past_prices)} past + {len(future_prices)} future points")
+                    logging.debug("DB Debug: Chart update #%s for %s %s: %s past + %s future points", count, symbol, current_timeframe, len(past_prices), len(future_prices))
                 
         except WebSocketDisconnect:
             print(f"📊 Chart WebSocket disconnected for {symbol}")

@@ -480,7 +480,7 @@ class StockRealtimeService:
                 'timeframe': timeframe,
                 'connected_at': datetime.now()
             }
-            print(f"✅ Stock connection stored for {symbol}")
+            logging.debug("Stock connection stored for %s", symbol)
             
             # Send historical data
             print(f"📊 Sending stock historical data for {symbol}")

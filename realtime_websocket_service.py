@@ -441,7 +441,7 @@ class RealTimeWebSocketService:
                 'timeframe': timeframe,
                 'connected_at': datetime.now()
             }
-            print(f"✅ Connection stored for {symbol}", flush=True)
+            logging.debug("Connection stored for %s", symbol)
             
             # Send historical data
             print(f"📈 Sending historical data for {symbol}", flush=True)
