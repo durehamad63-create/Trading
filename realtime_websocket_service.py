@@ -327,7 +327,7 @@ class RealTimeWebSocketService:
                         predicted_price = float(cached_pred.get('predicted_price', current_price))
                         forecast_direction = cached_pred.get('forecast_direction', 'HOLD')
                         confidence = cached_pred.get('confidence', 75)
-                        print(f"🔮 Using cached prediction for {symbol}: ${predicted_price:.2f} ({forecast_direction})")
+
                 else:
                     print(f"🔄 No cached prediction for {symbol}, generating fresh prediction")
                     # Generate fresh prediction in background (non-blocking)
