@@ -21,7 +21,7 @@ async def test_timeframe_switching():
     print(f"🔗 Connecting to: {uri}")
     
     try:
-        async with websockets.connect(uri) as websocket:
+        async with websockets.connect(uri, close_timeout=10) as websocket:
             print("✅ WebSocket connected")
             
             # Listen for initial messages
@@ -80,10 +80,15 @@ async def test_timeframe_switching():
             
             print(f"\n🎯 Test completed! Total messages: {message_count}")
             
+            # Send proper close frame
+            await websocket.close(code=1000, reason="Test completed")
+            
     except websockets.exceptions.ConnectionClosed as e:
         print(f"❌ Connection closed: {e}")
     except Exception as e:
         print(f"❌ Connection error: {e}")
+    finally:
+        print("🔄 Connection cleanup completed")
 
 async def test_multiple_connections():
     """Test multiple simultaneous connections with different timeframes"""
@@ -96,30 +101,37 @@ async def test_multiple_connections():
     
     async def single_connection_test(symbol, timeframe):
         uri = f"{BASE_URL}/ws/chart/{symbol}"
+        websocket = None
         try:
-            async with websockets.connect(uri) as websocket:
-                print(f"✅ Connected: {symbol} ({timeframe})")
-                
-                # Change timeframe
-                change_message = {
-                    "type": "change_timeframe", 
-                    "timeframe": timeframe
-                }
-                await websocket.send(json.dumps(change_message))
-                
-                # Listen for 5 seconds
-                for _ in range(3):
-                    try:
-                        message = await asyncio.wait_for(websocket.recv(), timeout=2.0)
-                        data = json.loads(message)
-                        if data.get("type") == "chart_update":
-                            tf = data.get("timeframe", "?")
-                            print(f"📊 {symbol}: {tf}")
-                    except asyncio.TimeoutError:
-                        break
-                        
+            websocket = await websockets.connect(uri, close_timeout=5)
+            print(f"✅ Connected: {symbol} ({timeframe})")
+            
+            # Change timeframe
+            change_message = {
+                "type": "change_timeframe", 
+                "timeframe": timeframe
+            }
+            await websocket.send(json.dumps(change_message))
+            
+            # Listen for 5 seconds
+            for _ in range(3):
+                try:
+                    message = await asyncio.wait_for(websocket.recv(), timeout=2.0)
+                    data = json.loads(message)
+                    if data.get("type") == "chart_update":
+                        tf = data.get("timeframe", "?")
+                        print(f"📊 {symbol}: {tf}")
+                except asyncio.TimeoutError:
+                    break
+                    
         except Exception as e:
             print(f"❌ {symbol} error: {e}")
+        finally:
+            if websocket:
+                try:
+                    await websocket.close(code=1000, reason="Test completed")
+                except:
+                    pass
     
     # Run multiple connections simultaneously
     tasks = []

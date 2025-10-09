@@ -2123,9 +2123,8 @@ def setup_routes(app: FastAPI, model, database=None):
                     await websocket.send_text(json.dumps(chart_data))
                 except Exception as send_error:
                     print(f"📡 Send failed for {symbol}: {send_error}")
-                    if "close" in str(send_error).lower():
-                        connection_active = False
-                        break
+                    connection_active = False
+                    break
                 
                 if count % 10 == 0:
                     print(f"📊 DB Debug: Chart update #{count} for {symbol} {current_timeframe}: {len(past_prices)} past + {len(future_prices)} future points")
