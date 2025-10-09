@@ -1834,6 +1834,16 @@ def setup_routes(app: FastAPI, model, database=None):
             count = 0
             while connection_active:
                 count += 1
+                
+                # Check if connection is still active before processing
+                try:
+                    if websocket.client_state.name != 'CONNECTED':
+                        connection_active = False
+                        break
+                except:
+                    connection_active = False
+                    break
+                
                 await asyncio.sleep(2)  # Faster updates for better responsiveness
                 
                 # Get current price and prediction from real data
@@ -2131,12 +2141,19 @@ def setup_routes(app: FastAPI, model, database=None):
                 
         except WebSocketDisconnect:
             print(f"📊 Chart WebSocket disconnected for {symbol}")
+            connection_active = False
         except Exception as e:
             print(f"❌ Chart WebSocket error for {symbol}: {e}")
+            connection_active = False
         finally:
+            connection_active = False
             # Cleanup message handler
             if 'message_task' in locals():
                 message_task.cancel()
+                try:
+                    await message_task
+                except asyncio.CancelledError:
+                    pass
     
     @app.websocket("/ws/mobile")
     async def deprecated_mobile_websocket(websocket: WebSocket):
