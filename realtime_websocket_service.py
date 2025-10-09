@@ -409,11 +409,15 @@ class RealTimeWebSocketService:
         async def send_batch(conn_id, websocket):
             async with semaphore:
                 try:
-                    await websocket.send_text(message)
-                except Exception as e:
-                    if "connectionclosed" in str(e).lower():
-                        # Remove dead connection
+                    # Check connection state before sending
+                    if hasattr(websocket, 'client_state') and websocket.client_state.name == 'CONNECTED':
+                        await websocket.send_text(message)
+                    else:
+                        # Remove inactive connection
                         self.active_connections[symbol].pop(conn_id, None)
+                except Exception as e:
+                    # Remove failed connection
+                    self.active_connections[symbol].pop(conn_id, None)
         
         # Execute batch sends
         await asyncio.gather(

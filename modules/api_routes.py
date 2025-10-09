@@ -1822,6 +1822,11 @@ def setup_routes(app: FastAPI, model, database=None):
                                     current_timeframe = new_timeframe
                                     config = timeframe_intervals.get(current_timeframe, {'past': 30, 'future': 7, 'update_seconds': 1440})
                                     force_update = True
+                                    
+                                    # Update connection timeframe in manager
+                                    if symbol in manager.active_connections and connection_id in manager.active_connections[symbol]:
+                                        manager.active_connections[symbol][connection_id]['timeframe'] = current_timeframe
+                                        print(f"⚙️ Updated connection timeframe to {current_timeframe}")
                         except json.JSONDecodeError:
                             pass
                 except Exception as msg_error:
@@ -1835,12 +1840,18 @@ def setup_routes(app: FastAPI, model, database=None):
             while connection_active:
                 count += 1
                 
-                # Check if connection is still active before processing
+                # Check connection state more reliably
                 try:
-                    if websocket.client_state.name != 'CONNECTED':
-                        connection_active = False
-                        break
-                except:
+                    if hasattr(websocket, 'client_state'):
+                        if websocket.client_state.name != 'CONNECTED':
+                            print(f"🔌 Connection closed for {symbol}")
+                            connection_active = False
+                            break
+                    else:
+                        # Fallback check by trying to send ping
+                        await websocket.send_text(json.dumps({"type": "ping"}))
+                except Exception as e:
+                    print(f"🔌 Connection check failed for {symbol}: {e}")
                     connection_active = False
                     break
                 
@@ -1953,6 +1964,7 @@ def setup_routes(app: FastAPI, model, database=None):
                     last_prediction_time = None
                     config = timeframe_intervals.get(current_timeframe, {'past': 30, 'future': 7, 'update_seconds': 1440})
                     force_update = False
+                    print(f"🔄 Cache reset for timeframe {current_timeframe}")
                 
                 if should_update_prediction:
                     # Generate new consistent forecast line
@@ -2130,7 +2142,12 @@ def setup_routes(app: FastAPI, model, database=None):
                 
                 # Check connection state before sending
                 try:
-                    await websocket.send_text(json.dumps(chart_data))
+                    if hasattr(websocket, 'client_state') and websocket.client_state.name == 'CONNECTED':
+                        await websocket.send_text(json.dumps(chart_data))
+                    else:
+                        print(f"🔌 Connection not ready for {symbol}")
+                        connection_active = False
+                        break
                 except Exception as send_error:
                     print(f"📡 Send failed for {symbol}: {send_error}")
                     connection_active = False
