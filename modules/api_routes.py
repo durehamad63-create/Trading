@@ -1777,6 +1777,7 @@ def setup_routes(app: FastAPI, model, database=None):
         current_timeframe = timeframe
         connection_active = True
         force_update = False
+        config = timeframe_intervals.get(current_timeframe, {'past': 30, 'future': 1, 'update_seconds': 1440})
         
         # Validate symbol
         all_symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX',
@@ -1798,8 +1799,6 @@ def setup_routes(app: FastAPI, model, database=None):
             '1M': {'past': 30, 'future': 7, 'update_seconds': 43200}   # 37 total points
         }
         
-        config = timeframe_intervals.get(current_timeframe, {'past': 30, 'future': 1, 'update_seconds': 1440})
-        
         # Store consistent forecast line
         consistent_forecast_line = None
         consistent_forecast_timestamps = None
@@ -1819,6 +1818,7 @@ def setup_routes(app: FastAPI, model, database=None):
                                 if new_timeframe != current_timeframe:
                                     print(f"🔄 Timeframe change: {current_timeframe} -> {new_timeframe}")
                                     current_timeframe = new_timeframe
+                                    config = timeframe_intervals.get(current_timeframe, {'past': 30, 'future': 7, 'update_seconds': 1440})
                                     force_update = True
                         except json.JSONDecodeError:
                             pass
@@ -1906,6 +1906,7 @@ def setup_routes(app: FastAPI, model, database=None):
                     consistent_forecast_line = None
                     consistent_forecast_timestamps = None
                     last_prediction_time = None
+                    config = timeframe_intervals.get(current_timeframe, {'past': 30, 'future': 7, 'update_seconds': 1440})
                     force_update = False
                 
                 if should_update_prediction:
