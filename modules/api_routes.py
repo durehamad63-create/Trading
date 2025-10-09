@@ -272,8 +272,7 @@ def setup_routes(app: FastAPI, model, database=None):
                             'data_source': 'Economic Simulation',
                             'asset_class': 'macro'
                         })
-                    else:
-
+                
                 cached_count = sum(1 for s in macro_symbols if macro_realtime_service and hasattr(macro_realtime_service, 'price_cache') and s in macro_realtime_service.price_cache)
                 print(f"📊 MACRO RESULT: {len(assets)} assets (cached: {cached_count}, synthetic: {len(assets) - cached_count})")
             
