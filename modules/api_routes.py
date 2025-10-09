@@ -79,6 +79,20 @@ def setup_routes(app: FastAPI, model, database=None):
         except Exception:
             return {"direction": "HOLD", "confidence": 50, "range": "N/A"}
     
+    async def _get_ml_confidence(symbol: str, change_24h: float):
+        """Get ML model confidence for symbol"""
+        try:
+            if model:
+                prediction = await model.predict(symbol)
+                return prediction.get('confidence', 75)
+            else:
+                # Fallback confidence based on volatility
+                base_confidence = 75
+                volatility_factor = min(10, abs(change_24h) * 2)
+                return max(60, min(90, base_confidence - volatility_factor))
+        except Exception:
+            return 75
+    
     async def get_symbol_prediction(symbol: str, model, db):
         """Get prediction for a single symbol with database storage"""
         try:
@@ -113,7 +127,7 @@ def setup_routes(app: FastAPI, model, database=None):
         try:
             # Get class parameter from query string to avoid Python keyword conflict
             class_param = request.query_params.get('class', 'crypto') if request else 'crypto'
-            print(f"🔍 MARKET SUMMARY REQUEST: class='{class_param}', limit={limit}")
+            print(f"📊 MARKET SUMMARY API: class='{class_param}', limit={limit}")
             crypto_symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX']
             stock_symbols = ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM']
             macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
@@ -161,7 +175,7 @@ def setup_routes(app: FastAPI, model, database=None):
             # Get data based on class filter
             
             if class_param == "crypto":
-                print(f"🔍 CRYPTO FILTER - Processing {len(crypto_symbols[:limit])} symbols")
+                print(f"📊 MARKET SUMMARY: Processing {len(crypto_symbols[:limit])} crypto symbols - checking cache vs API")
                 for symbol in crypto_symbols[:limit]:
                     # Try cache first
                     cache_key = cache_keys.price(symbol, 'crypto')
@@ -182,11 +196,9 @@ def setup_routes(app: FastAPI, model, database=None):
                                 'volume': 1000000000
                             }
                         except Exception as e:
-                            print(f"❌ Failed to get {symbol} data: {e}")
                             continue
                     
                     if price_data:
-                        print(f"✅ Adding crypto asset: {symbol}")
                         assets.append({
                             'symbol': symbol,
                             'name': multi_asset.get_asset_name(symbol),
@@ -194,15 +206,15 @@ def setup_routes(app: FastAPI, model, database=None):
                             'change_24h': price_data['change_24h'],
                             'volume': price_data['volume'],
                             'forecast_direction': 'UP' if price_data['change_24h'] > 1 else 'DOWN' if price_data['change_24h'] < -1 else 'HOLD',
-                            'confidence': min(80, max(60, 70 + abs(price_data['change_24h']))),
+                            'confidence': await _get_ml_confidence(symbol, price_data['change_24h']),
                             'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
                             'data_source': 'Live API',
                             'asset_class': 'crypto'
                         })
-                print(f"🔍 CRYPTO RESULT: {len(assets)} assets added")
+                print(f"📊 CRYPTO RESULT: {len(assets)} assets (cache: {sum(1 for s in crypto_symbols[:limit] if realtime_service and s in realtime_service.price_cache)}, API: {len(assets) - sum(1 for s in crypto_symbols[:limit] if realtime_service and s in realtime_service.price_cache)})")
             
             elif class_param == "stocks":
-                print(f"🔍 STOCK FILTER - Processing {len(stock_symbols[:limit])} symbols")
+                print(f"📊 MARKET SUMMARY: Processing {len(stock_symbols[:limit])} stock symbols - checking cache vs API")
                 for symbol in stock_symbols[:limit]:
                     cache_key = cache_keys.price(symbol, 'stock')
                     price_data = cache_manager.get_cache(cache_key)
@@ -212,7 +224,6 @@ def setup_routes(app: FastAPI, model, database=None):
                             price_data = stock_realtime_service.price_cache[symbol]
                     
                     if price_data:
-                        print(f"✅ Adding stock asset: {symbol}")
                         assets.append({
                             'symbol': symbol,
                             'name': stock_realtime_service.stock_symbols.get(symbol, symbol) if stock_realtime_service else symbol,
@@ -220,28 +231,25 @@ def setup_routes(app: FastAPI, model, database=None):
                             'change_24h': price_data['change_24h'],
                             'volume': price_data['volume'],
                             'forecast_direction': 'UP' if price_data['change_24h'] > 0.5 else 'DOWN' if price_data['change_24h'] < -0.5 else 'HOLD',
-                            'confidence': min(85, max(65, 75 + abs(price_data['change_24h']))),
+                            'confidence': await _get_ml_confidence(symbol, price_data['change_24h']),
                             'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
                             'data_source': price_data.get('data_source', 'Stock API'),
                             'asset_class': 'stocks'
                         })
-                print(f"🔍 STOCK RESULT: {len(assets)} assets added")
+                print(f"📊 STOCK RESULT: {len(assets)} assets (cache: {sum(1 for s in stock_symbols[:limit] if stock_realtime_service and s in stock_realtime_service.price_cache)}, API: {len(assets) - sum(1 for s in stock_symbols[:limit] if stock_realtime_service and s in stock_realtime_service.price_cache)})")
             
             elif class_param == "macro":
-                print(f"🔍 MACRO FILTER - Service available: {macro_realtime_service is not None}")
-                if macro_realtime_service:
-                    print(f"🔍 MACRO CACHE - Size: {len(macro_realtime_service.price_cache) if hasattr(macro_realtime_service, 'price_cache') else 0}")
-                    print(f"🔍 MACRO SYMBOLS: {list(macro_realtime_service.price_cache.keys()) if hasattr(macro_realtime_service, 'price_cache') else []}")
+                print(f"📊 MARKET SUMMARY: Processing {len(macro_symbols)} macro symbols - checking cache vs synthetic")
                 
                 for symbol in macro_symbols:
                     cache_key = cache_keys.price(symbol, 'macro')
                     price_data = cache_manager.get_cache(cache_key)
-                    print(f"🔍 Checking {symbol}: Redis cache = {price_data is not None}")
+
                     
                     if not price_data and macro_realtime_service and hasattr(macro_realtime_service, 'price_cache'):
                         if symbol in macro_realtime_service.price_cache:
                             price_data = macro_realtime_service.price_cache[symbol]
-                            print(f"🔍 Found {symbol} in service cache")
+
                     
                     if price_data:
                         unit = price_data.get('unit', '')
@@ -252,7 +260,6 @@ def setup_routes(app: FastAPI, model, database=None):
                         else:
                             formatted_price = f"{price_data['current_price']:.1f}"
                         
-                        print(f"✅ Adding macro asset: {symbol} = {formatted_price}")
                         assets.append({
                             'symbol': symbol,
                             'name': multi_asset.get_asset_name(symbol),
@@ -261,13 +268,14 @@ def setup_routes(app: FastAPI, model, database=None):
                             'change_24h': price_data['change_24h'],
                             'volume': price_data['volume'],
                             'forecast_direction': 'UP' if price_data['change_24h'] > 0.01 else 'DOWN' if price_data['change_24h'] < -0.01 else 'HOLD',
-                            'confidence': min(90, max(70, 80 + abs(price_data['change_24h']) * 10)),
+                            'confidence': await _get_ml_confidence(symbol, price_data['change_24h']),
                             'data_source': 'Economic Simulation',
                             'asset_class': 'macro'
                         })
                     else:
-                        print(f"❌ No data found for {symbol}")
-                print(f"🔍 MACRO RESULT: {len(assets)} assets added")
+
+                cached_count = sum(1 for s in macro_symbols if macro_realtime_service and hasattr(macro_realtime_service, 'price_cache') and s in macro_realtime_service.price_cache)
+                print(f"📊 MACRO RESULT: {len(assets)} assets (cached: {cached_count}, synthetic: {len(assets) - cached_count})")
             
             else:  # "all" case
                 # Add crypto assets (exclude stablecoins)
@@ -287,7 +295,7 @@ def setup_routes(app: FastAPI, model, database=None):
                             'change_24h': price_data['change_24h'],
                             'volume': price_data['volume'],
                             'forecast_direction': 'UP' if price_data['change_24h'] > 1 else 'DOWN' if price_data['change_24h'] < -1 else 'HOLD',
-                            'confidence': min(80, max(60, 70 + abs(price_data['change_24h']))),
+                            'confidence': await _get_ml_confidence(symbol, price_data['change_24h']),
                             'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
                             'data_source': 'Binance Stream',
                             'asset_class': 'crypto'
@@ -310,7 +318,7 @@ def setup_routes(app: FastAPI, model, database=None):
                             'change_24h': price_data['change_24h'],
                             'volume': price_data['volume'],
                             'forecast_direction': 'UP' if price_data['change_24h'] > 0.5 else 'DOWN' if price_data['change_24h'] < -0.5 else 'HOLD',
-                            'confidence': min(85, max(65, 75 + abs(price_data['change_24h']))),
+                            'confidence': await _get_ml_confidence(symbol, price_data['change_24h']),
                             'predicted_range': f"${price_data['current_price']*0.98:.2f}–${price_data['current_price']*1.02:.2f}",
                             'data_source': price_data.get('data_source', 'Stock API'),
                             'asset_class': 'stocks'
