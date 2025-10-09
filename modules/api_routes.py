@@ -1803,6 +1803,7 @@ def setup_routes(app: FastAPI, model, database=None):
         consistent_forecast_line = None
         consistent_forecast_timestamps = None
         last_prediction_time = None
+        last_used_timeframe = current_timeframe
         
         try:
             # Message handler for timeframe changes
@@ -1884,12 +1885,11 @@ def setup_routes(app: FastAPI, model, database=None):
                 
                 # Use consistent forecast line - reset if timeframe changed
                 current_time = datetime.now()
-                # Track previous timeframe to detect changes
-                if not hasattr(enhanced_chart_websocket, 'prev_timeframe'):
-                    enhanced_chart_websocket.prev_timeframe = current_timeframe
-                
-                timeframe_changed = enhanced_chart_websocket.prev_timeframe != current_timeframe
-                enhanced_chart_websocket.prev_timeframe = current_timeframe
+                # Detect timeframe changes
+                timeframe_changed = last_used_timeframe != current_timeframe
+                if timeframe_changed:
+                    print(f"🔄 Timeframe changed from {last_used_timeframe} to {current_timeframe}")
+                    last_used_timeframe = current_timeframe
                 
                 should_update_prediction = (
                     consistent_forecast_line is None or 
