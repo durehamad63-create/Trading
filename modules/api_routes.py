@@ -373,29 +373,40 @@ def setup_routes(app: FastAPI, model, database=None):
             # Try to get real data from database first
             if db and db.pool:
                 try:
-                    symbol_tf = f"{symbol}_{timeframe}"
+                    # Try multiple symbol formats
+                    symbol_formats = [f"{symbol}_{timeframe}", f"{symbol}_{timeframe.lower()}", symbol]
+                    actual_data = None
+                    pred_data = None
+                    
                     async with db.pool.acquire() as conn:
-                        # Get actual prices
-                        actual_data = await conn.fetch(
-                            "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT 50",
-                            symbol_tf
-                        )
-                        # Get predictions
-                        pred_data = await conn.fetch(
-                            "SELECT predicted_price, created_at FROM forecasts WHERE symbol = $1 ORDER BY created_at DESC LIMIT 50",
-                            symbol_tf
-                        )
+                        for symbol_tf in symbol_formats:
+                            # Get actual prices
+                            actual_data = await conn.fetch(
+                                "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT 50",
+                                symbol_tf
+                            )
+                            if actual_data:
+                                break
                         
-                        if actual_data and pred_data:
+                        for symbol_tf in symbol_formats:
+                            # Get predictions
+                            pred_data = await conn.fetch(
+                                "SELECT predicted_price, created_at FROM forecasts WHERE symbol = $1 ORDER BY created_at DESC LIMIT 50",
+                                symbol_tf
+                            )
+                            if pred_data:
+                                break
+                        
+                        if actual_data:
                             for i, record in enumerate(reversed(actual_data)):
                                 actual_prices.append(float(record['price']))
                                 timestamps.append(record['timestamp'].isoformat())
                                 
                                 # Match with prediction if available
-                                if i < len(pred_data):
+                                if pred_data and i < len(pred_data):
                                     predicted_prices.append(float(pred_data[i]['predicted_price']))
                                 else:
-                                    # ✅ FIXED: Use ML model prediction instead of random
+                                    # Use ML model prediction
                                     try:
                                         ml_pred = await model.predict(symbol)
                                         predicted_prices.append(float(ml_pred.get('predicted_price', record['price'])))
