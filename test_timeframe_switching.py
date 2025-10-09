@@ -10,8 +10,8 @@ import time
 async def test_timeframe_switching():
     """Test timeframe switching on chart WebSocket"""
     
-    # Test configuration
-    BASE_URL = "wss://trading-production-85d8.up.railway.app"
+    # Test configuration (use local server)
+    BASE_URL = "ws://localhost:8000"
     SYMBOL = "BTC"
     TIMEFRAMES = ["1H", "4H", "1D", "7D", "1W"]
     

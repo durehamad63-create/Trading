@@ -886,11 +886,42 @@ def setup_routes(app: FastAPI, model, database=None):
                     if conn_data['timeframe'] == timeframe
                 ]
                 
-                for websocket in matching_connections:
-                    tasks.append(websocket.send_text(message))
+                # Send individually and handle failures per connection
+                for conn_id, conn_data in list(manager.active_connections[symbol].items()):
+                    if conn_data.get('timeframe') != timeframe:
+                        continue
+                    ws = conn_data.get('websocket')
+                    async def _send_and_handle(ws=ws, sym=symbol, cid=conn_id, msg=message):
+                        try:
+                            await ws.send_text(msg)
+                        except Exception as _err:
+                            # Remove the connection on any send failure to avoid future errors
+                            try:
+                                await manager.safe_disconnect(ws, sym, cid)
+                            except Exception:
+                                pass
+                    tasks.append(_send_and_handle())
         
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def safe_send_ws(websocket: WebSocket, message: str, symbol: str = None, connection_id: str = None) -> bool:
+        """Helper to send over websocket and remove connection on failure.
+
+        Returns True on success, False on failure.
+        """
+        try:
+            await websocket.send_text(message)
+            return True
+        except Exception as e:
+            print(f"Send failed (safe_send_ws): {e}")
+            # If this websocket is tracked by manager, try to remove it
+            if symbol and connection_id:
+                try:
+                    await manager.safe_disconnect(websocket, symbol, connection_id)
+                except Exception:
+                    pass
+            return False
     
     # Helper function for accuracy metrics - removed, logic moved inline
     
@@ -1055,8 +1086,8 @@ def setup_routes(app: FastAPI, model, database=None):
                             "timestamp": datetime.now().isoformat(),
                             "ping_count": ping_count
                         }
-                        await websocket.send_text(json.dumps(realtime_data))
-                        if ping_count % 10 == 0:  # Log every 10th update
+                        sent_ok = await safe_send_ws(websocket, json.dumps(realtime_data), symbol, connection_id)
+                        if ping_count % 10 == 0 and sent_ok:  # Log every 10th update
                             print(f"📡 Update #{ping_count}: {symbol} = ${current_price:.2f}")
                     else:
                         # Send ping if no price data
@@ -1067,8 +1098,8 @@ def setup_routes(app: FastAPI, model, database=None):
                             "ping_count": ping_count,
                             "timestamp": datetime.now().isoformat()
                         }
-                        await websocket.send_text(json.dumps(ping_data))
-                        if ping_count % 10 == 0:  # Log every 10th ping
+                        sent_ok = await safe_send_ws(websocket, json.dumps(ping_data), symbol, connection_id)
+                        if ping_count % 10 == 0 and sent_ok:  # Log every 10th ping
                             print(f"📡 Ping #{ping_count}: {symbol} (no data)")
                     
                 except Exception as e:
