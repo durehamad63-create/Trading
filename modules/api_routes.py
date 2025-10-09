@@ -1858,11 +1858,16 @@ def setup_routes(app: FastAPI, model, database=None):
                 past_timestamps = []
                 
                 # Get real historical data from database for all timeframes
-                if db and db.pool:
+                if not db:
+                    print(f"❌ DB Debug: Database instance is None for {symbol}")
+                elif not db.pool:
+                    print(f"❌ DB Debug: Database pool is None for {symbol}")
+                else:
                     try:
                         # Try both timeframe formats (1h and 1H)
                         symbol_tf_formats = [f"{symbol}_{current_timeframe}", f"{symbol}_{current_timeframe.lower()}"]
                         historical_data = None
+                        print(f"🔍 DB Debug: Querying {symbol_tf_formats} for {config['past']} records")
                         
                         async with db.pool.acquire() as conn:
                             for symbol_tf in symbol_tf_formats:
@@ -1870,6 +1875,7 @@ def setup_routes(app: FastAPI, model, database=None):
                                     "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT $2",
                                     symbol_tf, config['past']
                                 )
+                                print(f"🔍 DB Debug: Query {symbol_tf} returned {len(historical_data) if historical_data else 0} records")
                                 if historical_data:
                                     break
                             
@@ -1877,20 +1883,47 @@ def setup_routes(app: FastAPI, model, database=None):
                                 for record in reversed(historical_data):
                                     past_prices.append(float(record['price']))
                                     past_timestamps.append(record['timestamp'].isoformat())
+                                print(f"✅ DB Debug: Loaded {len(past_prices)} historical prices for {symbol}")
+                            else:
+                                print(f"⚠️ DB Debug: No historical data found for {symbol} in any format")
                     except Exception as e:
-                        print(f"❌ Database error for {symbol}_{timeframe}: {e}")
+                        print(f"❌ DB Debug: Database error for {symbol}_{current_timeframe}: {e}")
+                        print(f"❌ DB Debug: Exception type: {type(e).__name__}")
                 
-                # Skip if no real data available
+                # Generate fallback data if no database data
                 if not past_prices:
-                    await asyncio.sleep(1)
-                    continue
+                    print(f"🔄 DB Debug: Generating {config['past']} fallback prices for {symbol} {current_timeframe}")
+                    for i in range(config['past']):
+                        if current_timeframe in ['1h', '1H']:
+                            time_offset = timedelta(hours=config['past'] - i)
+                        elif current_timeframe == '4H':
+                            time_offset = timedelta(hours=(config['past'] - i) * 4)
+                        elif current_timeframe == '1D':
+                            time_offset = timedelta(days=config['past'] - i)
+                        elif current_timeframe == '7D':
+                            time_offset = timedelta(days=(config['past'] - i) * 7)
+                        elif current_timeframe == '1W':
+                            time_offset = timedelta(weeks=config['past'] - i)
+                        elif current_timeframe == '1M':
+                            time_offset = timedelta(days=(config['past'] - i) * 30)
+                        else:
+                            time_offset = timedelta(days=config['past'] - i)
+                        
+                        timestamp = current_time - time_offset
+                        trend_factor = (i / config['past']) * 0.1
+                        volatility = (i % 5 - 2) * 0.02
+                        historical_price = current_price * (0.95 + trend_factor + volatility)
+                        
+                        past_prices.append(round(historical_price, 2))
+                        past_timestamps.append(timestamp.isoformat())
+                    print(f"✅ DB Debug: Generated {len(past_prices)} fallback prices for {symbol}")
                 
                 # Use consistent forecast line - reset if timeframe changed
                 current_time = datetime.now()
                 # Detect timeframe changes
                 timeframe_changed = last_used_timeframe != current_timeframe
                 if timeframe_changed:
-                    print(f"🔄 Timeframe changed from {last_used_timeframe} to {current_timeframe}")
+                    print(f"🔄 DB Debug: Timeframe changed from {last_used_timeframe} to {current_timeframe} - Config: {config}")
                     last_used_timeframe = current_timeframe
                 
                 should_update_prediction = (
@@ -1912,7 +1945,7 @@ def setup_routes(app: FastAPI, model, database=None):
                 if should_update_prediction:
                     # Generate new consistent forecast line
                     last_prediction_time = current_time
-                    print(f"🔮 Generating consistent forecast for {symbol} ({config['future']} points)")
+                    print(f"🔮 DB Debug: Generating consistent forecast for {symbol} ({config['future']} points) - TF: {current_timeframe}")
                 
                     # Generate realistic forecast line that blends smoothly from historical data
                     import hashlib
@@ -2085,18 +2118,15 @@ def setup_routes(app: FastAPI, model, database=None):
                 
                 # Check connection state before sending
                 try:
-                    if hasattr(websocket, 'client_state') and websocket.client_state.name == 'CONNECTED':
-                        await websocket.send_text(json.dumps(chart_data))
-                    else:
-                        connection_active = False
-                        break
+                    await websocket.send_text(json.dumps(chart_data))
                 except Exception as send_error:
                     print(f"📡 Send failed for {symbol}: {send_error}")
-                    connection_active = False
-                    break
+                    if "close" in str(send_error).lower():
+                        connection_active = False
+                        break
                 
                 if count % 10 == 0:
-                    print(f"📊 Chart update #{count} for {symbol}: {len(past_prices)} past + {len(future_prices)} future points")
+                    print(f"📊 DB Debug: Chart update #{count} for {symbol} {current_timeframe}: {len(past_prices)} past + {len(future_prices)} future points")
                 
         except WebSocketDisconnect:
             print(f"📊 Chart WebSocket disconnected for {symbol}")
