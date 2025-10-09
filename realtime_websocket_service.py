@@ -377,13 +377,10 @@ class RealTimeWebSocketService:
             # Generate and store forecast for this timeframe
             try:
                 base_symbol = symbol.split('_')[0]  # Remove timeframe from symbol
-                print(f"🔮 Generating prediction for {base_symbol} (timeframe: {timeframe})")
                 prediction = await self.model.predict(base_symbol)
-                print(f"📊 Prediction generated for {base_symbol}: {prediction.get('predicted_price', 'N/A')}")
                 await db.store_forecast(symbol, prediction)
-                print(f"💾 Forecast stored in DB for {symbol}")
             except Exception as e:
-                print(f"❌ Prediction/storage failed for {symbol}: {e}")
+                pass
                 
         except Exception as e:
             ErrorHandler.log_database_error('store_realtime', symbol, str(e))

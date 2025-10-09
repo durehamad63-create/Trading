@@ -359,7 +359,7 @@ class StockRealtimeService:
                     try:
                         prediction = await self.model.predict(symbol)
                         await self.database.store_forecast(timeframe_symbol, prediction)
-                    except Exception as e:
+                    except Exception:
                         pass
                         
         except Exception as e:
