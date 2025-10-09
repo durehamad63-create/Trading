@@ -1769,9 +1769,13 @@ def setup_routes(app: FastAPI, model, database=None):
     
     @app.websocket("/ws/chart/{symbol}")
     async def enhanced_chart_websocket(websocket: WebSocket, symbol: str, timeframe: str = "1D"):
-        """Enhanced chart WebSocket with consistent line - only last future point updates"""
+        """Enhanced chart WebSocket with timeframe switching support"""
         await websocket.accept()
         print(f"📊 Enhanced chart WebSocket connected for {symbol} ({timeframe})")
+        
+        # Connection state for timeframe switching
+        current_timeframe = timeframe
+        connection_active = True
         
         # Validate symbol
         all_symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX',
@@ -1793,7 +1797,7 @@ def setup_routes(app: FastAPI, model, database=None):
             '1M': {'past': 30, 'future': 7, 'update_seconds': 43200}   # 37 total points
         }
         
-        config = timeframe_intervals.get(timeframe, {'past': 30, 'future': 1, 'update_seconds': 1440})
+        config = timeframe_intervals.get(current_timeframe, {'past': 30, 'future': 1, 'update_seconds': 1440})
         
         # Store consistent forecast line
         consistent_forecast_line = None
@@ -1801,10 +1805,34 @@ def setup_routes(app: FastAPI, model, database=None):
         last_prediction_time = None
         
         try:
+            # Message handler for timeframe changes
+            async def handle_client_messages():
+                nonlocal current_timeframe, connection_active
+                try:
+                    async for message in websocket.iter_text():
+                        try:
+                            data = json.loads(message)
+                            if data.get('type') == 'change_timeframe':
+                                new_timeframe = data.get('timeframe', current_timeframe)
+                                if new_timeframe != current_timeframe:
+                                    print(f"🔄 Timeframe change: {current_timeframe} -> {new_timeframe}")
+                                    current_timeframe = new_timeframe
+                                    # Reset forecast cache for new timeframe
+                                    consistent_forecast_line = None
+                                    consistent_forecast_timestamps = None
+                                    last_prediction_time = None
+                        except json.JSONDecodeError:
+                            pass
+                except Exception:
+                    connection_active = False
+            
+            # Start message handler
+            message_task = asyncio.create_task(handle_client_messages())
+            
             count = 0
-            while True:
+            while connection_active:
                 count += 1
-                await asyncio.sleep(3)  # Update every 3 seconds
+                await asyncio.sleep(2)  # Faster updates for better responsiveness
                 
                 # Get current price and prediction from real data
                 try:
@@ -1833,7 +1861,7 @@ def setup_routes(app: FastAPI, model, database=None):
                 if db and db.pool:
                     try:
                         # Try both timeframe formats (1h and 1H)
-                        symbol_tf_formats = [f"{symbol}_{timeframe}", f"{symbol}_{timeframe.lower()}"]
+                        symbol_tf_formats = [f"{symbol}_{current_timeframe}", f"{symbol}_{current_timeframe.lower()}"]
                         historical_data = None
                         
                         async with db.pool.acquire() as conn:
@@ -1874,7 +1902,7 @@ def setup_routes(app: FastAPI, model, database=None):
                     import math
                     
                     # Use symbol hash for deterministic predictions
-                    symbol_seed = int(hashlib.md5(f"{symbol}_{timeframe}".encode()).hexdigest()[:8], 16)
+                    symbol_seed = int(hashlib.md5(f"{symbol}_{current_timeframe}".encode()).hexdigest()[:8], 16)
                     
                     # Extract ML model's predicted range bounds
                     predicted_range_str = f"${predicted_price * 0.98:.2f}-${predicted_price * 1.02:.2f}"
@@ -1909,22 +1937,22 @@ def setup_routes(app: FastAPI, model, database=None):
                     
                     for i in range(config['future']):
                         # Calculate timestamp
-                        if timeframe in ['1h', '1H']:
+                        if current_timeframe in ['1h', '1H']:
                             time_offset = timedelta(hours=i + 1)
                             timestamp = (current_time + time_offset).replace(minute=0, second=0, microsecond=0)
-                        elif timeframe == '4H':
+                        elif current_timeframe == '4H':
                             time_offset = timedelta(hours=(i + 1) * 4)
                             timestamp = (current_time + time_offset).replace(minute=0, second=0, microsecond=0)
-                        elif timeframe == '1D':
+                        elif current_timeframe == '1D':
                             time_offset = timedelta(days=i + 1)
                             timestamp = (current_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
-                        elif timeframe == '7D':
+                        elif current_timeframe == '7D':
                             time_offset = timedelta(days=(i + 1) * 7)
                             timestamp = (current_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
-                        elif timeframe == '1W':
+                        elif current_timeframe == '1W':
                             time_offset = timedelta(weeks=i + 1)
                             timestamp = (current_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
-                        elif timeframe == '1M':
+                        elif current_timeframe == '1M':
                             time_offset = timedelta(days=(i + 1) * 30)
                             timestamp = (current_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
                         else:
@@ -2015,7 +2043,7 @@ def setup_routes(app: FastAPI, model, database=None):
                     "type": "chart_update",
                     "symbol": symbol,
                     "name": multi_asset.get_asset_name(symbol),
-                    "timeframe": timeframe,
+                    "timeframe": current_timeframe,
                     "forecast_direction": forecast_direction,
                     "confidence": confidence,
                     "predicted_range": f"${predicted_price * 0.98:.2f}-${predicted_price * 1.02:.2f}",
@@ -2047,6 +2075,10 @@ def setup_routes(app: FastAPI, model, database=None):
             print(f"📊 Chart WebSocket disconnected for {symbol}")
         except Exception as e:
             print(f"❌ Chart WebSocket error for {symbol}: {e}")
+        finally:
+            # Cleanup message handler
+            if 'message_task' in locals():
+                message_task.cancel()
     
     @app.websocket("/ws/mobile")
     async def deprecated_mobile_websocket(websocket: WebSocket):
