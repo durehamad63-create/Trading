@@ -1829,7 +1829,7 @@ def setup_routes(app: FastAPI, model, database=None):
         try:
             # Message handler for timeframe changes
             async def handle_client_messages():
-                nonlocal current_timeframe, connection_active, force_update, config, consistent_forecast_line, consistent_forecast_timestamps, last_prediction_time
+                nonlocal current_timeframe, connection_active, force_update, config
                 try:
                     async for message in websocket.iter_text():
                         try:
