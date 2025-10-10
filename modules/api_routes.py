@@ -1861,26 +1861,28 @@ def setup_routes(app: FastAPI, model, database=None):
             count = 0
             while connection_active:
                 count += 1
+                print(f"📊 Chart loop #{count} for {symbol} {current_timeframe}")
                 
-                # Skip connection state checks that cause immediate disconnects
-                pass
-                
-                await asyncio.sleep(2)  # Faster updates for better responsiveness
+                await asyncio.sleep(2)
                 
                 # Get current price and prediction from real data
                 try:
+                    print(f"🔮 Getting prediction for {symbol}")
                     if model:
                         prediction = await model.predict(symbol)
                         current_price = prediction.get('current_price', 100)
                         predicted_price = prediction.get('predicted_price', current_price)
                         forecast_direction = prediction.get('forecast_direction', 'HOLD')
                         confidence = prediction.get('confidence', 75)
+                        print(f"✅ Prediction: ${current_price} -> ${predicted_price} ({forecast_direction})")
                     else:
                         current_price = 100
                         predicted_price = 102
                         forecast_direction = 'UP'
                         confidence = 75
-                except Exception:
+                        print(f"⚠️ No model, using defaults")
+                except Exception as e:
+                    print(f"❌ Prediction error: {e}")
                     current_price = 100
                     predicted_price = 102
                     forecast_direction = 'UP'
@@ -1889,11 +1891,13 @@ def setup_routes(app: FastAPI, model, database=None):
                 # Generate past data points using same logic as forecast API
                 past_prices = []
                 past_timestamps = []
+                print(f"📈 Generating past data for {symbol} {current_timeframe}")
                 
                 # Try database first
                 if db and db.pool:
                     try:
                         symbol_tf = f"{symbol}_{current_timeframe}"
+                        print(f"🔍 Querying DB for {symbol_tf}")
                         async with db.pool.acquire() as conn:
                             historical_data = await conn.fetch(
                                 "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT $2",
@@ -1901,14 +1905,18 @@ def setup_routes(app: FastAPI, model, database=None):
                             )
                             
                             if historical_data:
+                                print(f"✅ Found {len(historical_data)} DB records")
                                 for record in reversed(historical_data):
                                     past_prices.append(float(record['price']))
                                     past_timestamps.append(record['timestamp'].isoformat())
-                    except Exception:
-                        pass
+                            else:
+                                print(f"⚠️ No DB data found")
+                    except Exception as e:
+                        print(f"❌ DB error: {e}")
                 
                 # Fallback: generate using forecast API logic
                 if not past_prices:
+                    print(f"🔄 Generating {config['past']} fallback past prices")
                     for i in range(config['past']):
                         if current_timeframe in ['1h', '1H']:
                             time_offset = timedelta(hours=config['past'] - i)
@@ -1932,10 +1940,12 @@ def setup_routes(app: FastAPI, model, database=None):
                         
                         past_prices.append(round(historical_price, 2))
                         past_timestamps.append(timestamp.isoformat())
+                    print(f"✅ Generated {len(past_prices)} past prices")
                 
                 # Generate future predictions using same logic as forecast API
                 future_prices = []
                 future_timestamps = []
+                print(f"🔮 Generating {config['future']} future predictions")
                 
                 for i in range(config['future']):
                     if current_timeframe in ['1h', '1H']:
@@ -1968,9 +1978,11 @@ def setup_routes(app: FastAPI, model, database=None):
                     future_price = predicted_price * growth_factor
                     future_prices.append(round(future_price, 2))
                     future_timestamps.append(timestamp.isoformat())
+                print(f"✅ Generated {len(future_prices)} future prices")
                 
                 # Combine all timestamps
                 all_timestamps = past_timestamps + future_timestamps
+                print(f"📊 Total data: {len(past_prices)} past + {len(future_prices)} future = {len(all_timestamps)} timestamps")
                 
                 # Create enhanced chart response
                 chart_data = {
@@ -1994,13 +2006,14 @@ def setup_routes(app: FastAPI, model, database=None):
                 }
                 
                 # Send data with safe sending
+                print(f"📤 Sending chart data for {symbol}")
                 sent_ok = await safe_send_ws(websocket, json.dumps(chart_data), symbol, connection_id)
-                if not sent_ok:
+                if sent_ok:
+                    print(f"✅ Chart update #{count} sent successfully")
+                else:
+                    print(f"❌ Failed to send chart update #{count}")
                     connection_active = False
                     break
-                
-                if count % 10 == 0:
-                    logging.debug("DB Debug: Chart update #%s for %s %s: %s past + %s future points", count, symbol, current_timeframe, len(past_prices), len(future_prices))
                 
         except WebSocketDisconnect:
             print(f"📊 Chart WebSocket disconnected for {symbol}")
