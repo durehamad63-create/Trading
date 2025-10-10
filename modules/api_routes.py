@@ -1893,46 +1893,29 @@ def setup_routes(app: FastAPI, model, database=None):
                     forecast_direction = 'UP'
                     confidence = 75
                 
-                # Generate past data points from real database
+                # Generate past data points using same logic as forecast API
                 past_prices = []
                 past_timestamps = []
                 
-                # Get real historical data from database for all timeframes
-                if not db:
-                    logging.debug("DB Debug: Database instance is None for %s", symbol)
-                elif not db.pool:
-                    logging.debug("DB Debug: Database pool is None for %s", symbol)
-                else:
+                # Try database first
+                if db and db.pool:
                     try:
-                        # Try both timeframe formats (1h and 1H)
-                        symbol_tf_formats = [f"{symbol}_{current_timeframe}", f"{symbol}_{current_timeframe.lower()}"]
-                        historical_data = None
-                        logging.debug("DB Debug: Querying %s for %s records", symbol_tf_formats, config.get('past'))
-                        
+                        symbol_tf = f"{symbol}_{current_timeframe}"
                         async with db.pool.acquire() as conn:
-                            for symbol_tf in symbol_tf_formats:
-                                historical_data = await conn.fetch(
-                                    "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT $2",
-                                    symbol_tf, config['past']
-                                )
-                                logging.debug("DB Debug: Query %s returned %s records", symbol_tf, len(historical_data) if historical_data else 0)
-                                if historical_data:
-                                    break
+                            historical_data = await conn.fetch(
+                                "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT $2",
+                                symbol_tf, config['past']
+                            )
                             
                             if historical_data:
                                 for record in reversed(historical_data):
                                     past_prices.append(float(record['price']))
                                     past_timestamps.append(record['timestamp'].isoformat())
-                                logging.debug("DB Debug: Loaded %s historical prices for %s", len(past_prices), symbol)
-                            else:
-                                logging.debug("DB Debug: No historical data found for %s in any format", symbol)
-                    except Exception as e:
-                        logging.debug("DB Debug: Database error for %s_%s: %s", symbol, current_timeframe, e)
-                        logging.debug("DB Debug: Exception type: %s", type(e).__name__)
+                    except Exception:
+                        pass
                 
-                # Generate fallback data if no database data
+                # Fallback: generate using forecast API logic
                 if not past_prices:
-                    logging.debug("DB Debug: Generating %s fallback prices for %s %s", config.get('past'), symbol, current_timeframe)
                     for i in range(config['past']):
                         if current_timeframe in ['1h', '1H']:
                             time_offset = timedelta(hours=config['past'] - i)
@@ -1941,7 +1924,7 @@ def setup_routes(app: FastAPI, model, database=None):
                         elif current_timeframe == '1D':
                             time_offset = timedelta(days=config['past'] - i)
                         elif current_timeframe == '7D':
-                            time_offset = timedelta(days=(config['past'] - i) * 7)
+                            time_offset = timedelta(weeks=config['past'] - i)
                         elif current_timeframe == '1W':
                             time_offset = timedelta(weeks=config['past'] - i)
                         elif current_timeframe == '1M':
@@ -1956,176 +1939,42 @@ def setup_routes(app: FastAPI, model, database=None):
                         
                         past_prices.append(round(historical_price, 2))
                         past_timestamps.append(timestamp.isoformat())
-                    logging.debug("DB Debug: Generated %s fallback prices for %s", len(past_prices), symbol)
                 
-                # Use consistent forecast line - reset if timeframe changed
-                current_time = datetime.now()
-                # Detect timeframe changes
-                timeframe_changed = last_used_timeframe != current_timeframe
-                if timeframe_changed:
-                    logging.debug("DB Debug: Timeframe changed from %s to %s - Config: %s", last_used_timeframe, current_timeframe, config)
-                    last_used_timeframe = current_timeframe
+                # Generate future predictions using same logic as forecast API
+                future_prices = []
+                future_timestamps = []
                 
-                should_update_prediction = (
-                    consistent_forecast_line is None or 
-                    last_prediction_time is None or
-                    timeframe_changed or
-                    force_update or
-                    (current_time - last_prediction_time).total_seconds() >= config['update_seconds']
-                )
-                
-                # Reset cache if timeframe changed or forced
-                if timeframe_changed or force_update:
-                    if not force_update:  # Only reset if not already reset in message handler
-                        consistent_forecast_line = None
-                        consistent_forecast_timestamps = None
-                        last_prediction_time = None
-                    config = timeframe_intervals.get(current_timeframe, {'past': 30, 'future': 7, 'update_seconds': 1440})
-                    force_update = False
-                    print(f"🔄 Cache reset for timeframe {current_timeframe}")
-                
-                if should_update_prediction:
-                    # Generate new consistent forecast line
-                    last_prediction_time = current_time
-                    logging.debug("DB Debug: Generating consistent forecast for %s (%s points) - TF: %s", symbol, config.get('future'), current_timeframe)
-                
-                    # Generate realistic forecast line that blends smoothly from historical data
-                    import hashlib
-                    import math
-                    
-                    # Use symbol hash for deterministic predictions
-                    symbol_seed = int(hashlib.md5(f"{symbol}_{current_timeframe}".encode()).hexdigest()[:8], 16)
-                    
-                    # Extract ML model's predicted range bounds
-                    predicted_range_str = f"${predicted_price * 0.98:.2f}-${predicted_price * 1.02:.2f}"
-                    try:
-                        # Parse the actual predicted range from the response
-                        range_parts = predicted_range_str.replace('$', '').split('-')
-                        range_min = float(range_parts[0])
-                        range_max = float(range_parts[1])
-                    except:
-                        # Fallback to 2% range around predicted price
-                        range_min = predicted_price * 0.98
-                        range_max = predicted_price * 1.02
-                    
-                    # Start from last historical price for smooth transition
-                    start_price = past_prices[-1] if past_prices else current_price
-                    
-                    # Target price should be within ML model's predicted range
-                    if forecast_direction == 'UP':
-                        target_price = range_max * 0.9  # Aim for upper range
-                    elif forecast_direction == 'DOWN':
-                        target_price = range_min * 1.1  # Aim for lower range
+                for i in range(config['future']):
+                    if current_timeframe in ['1h', '1H']:
+                        time_offset = timedelta(hours=i + 1)
+                    elif current_timeframe == '4H':
+                        time_offset = timedelta(hours=(i + 1) * 4)
+                    elif current_timeframe == '1D':
+                        time_offset = timedelta(days=i + 1)
+                    elif current_timeframe == '7D':
+                        time_offset = timedelta(weeks=i + 1)
+                    elif current_timeframe == '1W':
+                        time_offset = timedelta(weeks=i + 1)
+                    elif current_timeframe == '1M':
+                        time_offset = timedelta(days=(i + 1) * 30)
                     else:
-                        target_price = (range_min + range_max) / 2  # Middle of range
+                        time_offset = timedelta(days=i + 1)
                     
-                    # Calculate trend to reach target within forecast period
-                    total_change_needed = (target_price - start_price) / start_price
-                    target_trend = total_change_needed / config['future']  # Distribute over forecast periods
+                    timestamp = current_time + time_offset
+                    if current_timeframe in ['1D', '7D', '1W', '1M']:
+                        timestamp = timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
                     
-                    # Generate smooth forecast curve
-                    new_forecast_line = []
-                    new_forecast_timestamps = []
-                    
-                    for i in range(config['future']):
-                        # Calculate timestamp
-                        if current_timeframe in ['1h', '1H']:
-                            time_offset = timedelta(hours=i + 1)
-                            timestamp = (current_time + time_offset).replace(minute=0, second=0, microsecond=0)
-                        elif current_timeframe == '4H':
-                            time_offset = timedelta(hours=(i + 1) * 4)
-                            timestamp = (current_time + time_offset).replace(minute=0, second=0, microsecond=0)
-                        elif current_timeframe == '1D':
-                            time_offset = timedelta(days=i + 1)
-                            timestamp = (current_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
-                        elif current_timeframe == '7D':
-                            time_offset = timedelta(days=(i + 1) * 7)
-                            timestamp = (current_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
-                        elif current_timeframe == '1W':
-                            time_offset = timedelta(weeks=i + 1)
-                            timestamp = (current_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
-                        elif current_timeframe == '1M':
-                            time_offset = timedelta(days=(i + 1) * 30)
-                            timestamp = (current_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
-                        else:
-                            time_offset = timedelta(days=i + 1)
-                            timestamp = (current_time + time_offset).replace(hour=0, minute=0, second=0, microsecond=0)
-                        
-                        # Create smooth price progression within ML model bounds
-                        if i == 0:
-                            # First point: smooth transition from last historical price
-                            progress = 0.15  # 15% progress toward target on first step
-                            future_price = start_price + (target_price - start_price) * progress
-                        else:
-                            # Subsequent points: smooth progression toward target
-                            prev_price = new_forecast_line[i-1]
-                            
-                            # Progress factor using smooth curve
-                            progress = (i + 1) / config['future']  # Linear progress 0 to 1
-                            curve_progress = math.sin(progress * math.pi / 2)  # Smooth S-curve
-                            
-                            # Interpolate between start and target price
-                            future_price = start_price + (target_price - start_price) * curve_progress
-                            
-                            # Add small deterministic variations for realism (within bounds)
-                            micro_var_pct = ((symbol_seed + i * 7) % 10 - 5) / 1000  # ±0.5% variation
-                            variation = future_price * micro_var_pct
-                            future_price += variation
-                        
-                        # Strictly enforce ML model's predicted range bounds
-                        future_price = max(range_min, min(range_max, future_price))
-                        
-                        future_price = round(future_price, 2)
-                        future_price = max(0.01, future_price)
-                        
-                        new_forecast_line.append(future_price)
-                        new_forecast_timestamps.append(timestamp.isoformat())
-                    
-                    # Store consistent forecast
-                    consistent_forecast_line = new_forecast_line
-                    consistent_forecast_timestamps = new_forecast_timestamps
-                
-                # Use stored consistent forecast
-                future_prices = consistent_forecast_line or []
-                future_timestamps = consistent_forecast_timestamps or []
-                
-                # Apply final smoothing for natural curves (only when generating new forecast)
-                if should_update_prediction and len(future_prices) >= 3:
-                    # Apply moving average smoothing for natural curves
-                    smoothed_prices = [future_prices[0]]  # Keep first point
-                    
-                    for i in range(1, len(future_prices) - 1):
-                        # 3-point moving average for smoothness
-                        smoothed = (future_prices[i-1] + future_prices[i] + future_prices[i+1]) / 3
-                        smoothed_prices.append(smoothed)
-                    
-                    smoothed_prices.append(future_prices[-1])  # Keep last point
-                    
-                    # Ensure trend direction and ML bounds are maintained
+                    # Use ML prediction for future prices
                     if forecast_direction == 'UP':
-                        for i in range(1, len(smoothed_prices)):
-                            # Ensure upward trend within ML bounds
-                            min_expected = min(range_max, smoothed_prices[0] * (1 + 0.001 * i))
-                            if smoothed_prices[i] < min_expected:
-                                smoothed_prices[i] = min_expected
-                            # Enforce upper bound
-                            smoothed_prices[i] = min(range_max, smoothed_prices[i])
+                        growth_factor = 1 + (i + 1) * 0.01
                     elif forecast_direction == 'DOWN':
-                        for i in range(1, len(smoothed_prices)):
-                            # Ensure downward trend within ML bounds
-                            max_expected = max(range_min, smoothed_prices[0] * (1 - 0.001 * i))
-                            if smoothed_prices[i] > max_expected:
-                                smoothed_prices[i] = max_expected
-                            # Enforce lower bound
-                            smoothed_prices[i] = max(range_min, smoothed_prices[i])
+                        growth_factor = 1 - (i + 1) * 0.01
                     else:
-                        # HOLD: ensure all prices stay within ML bounds
-                        for i in range(len(smoothed_prices)):
-                            smoothed_prices[i] = max(range_min, min(range_max, smoothed_prices[i]))
+                        growth_factor = 1 + ((i % 3 - 1) * 0.005)
                     
-                    # Update with smoothed values
-                    future_prices = [round(p, 2) for p in smoothed_prices]
-                    consistent_forecast_line = future_prices
+                    future_price = predicted_price * growth_factor
+                    future_prices.append(round(future_price, 2))
+                    future_timestamps.append(timestamp.isoformat())
                 
                 # Combine all timestamps
                 all_timestamps = past_timestamps + future_timestamps
