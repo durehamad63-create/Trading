@@ -1816,10 +1816,7 @@ def setup_routes(app: FastAPI, model, database=None):
         
 
         
-        # Store consistent forecast line (nonlocal for message handler)
-        consistent_forecast_line = None
-        consistent_forecast_timestamps = None
-        last_prediction_time = None
+        # Connection state
         last_used_timeframe = current_timeframe
         # Register this websocket with the ConnectionManager so timeframe changes can update state
         connection_id = None
@@ -1844,10 +1841,6 @@ def setup_routes(app: FastAPI, model, database=None):
                                     current_timeframe = new_timeframe
                                     config = timeframe_intervals.get(current_timeframe, {'past': 30, 'future': 7, 'update_seconds': 1440})
                                     force_update = True
-                                    # Reset forecast cache for new timeframe
-                                    consistent_forecast_line = None
-                                    consistent_forecast_timestamps = None
-                                    last_prediction_time = None
                                     # Send immediate confirmation
                                     await websocket.send_text(json.dumps({
                                         "type": "timeframe_changed",
@@ -1979,7 +1972,7 @@ def setup_routes(app: FastAPI, model, database=None):
                 # Combine all timestamps
                 all_timestamps = past_timestamps + future_timestamps
                 
-                # Create enhanced chart response with consistent line
+                # Create enhanced chart response
                 chart_data = {
                     "type": "chart_update",
                     "symbol": symbol,
@@ -1997,14 +1990,7 @@ def setup_routes(app: FastAPI, model, database=None):
                         "future": future_prices,
                         "timestamps": all_timestamps
                     },
-                    "update_count": count,
-                    "data_source": "Real Database Data",
-                    "prediction_updated": should_update_prediction,
-                    "next_prediction_update": (last_prediction_time + timedelta(seconds=config['update_seconds'])).isoformat() if last_prediction_time else None,
-                    "forecast_stable": not should_update_prediction,
-                    "smooth_transition": len(past_prices) > 0 and len(future_prices) > 0,
-                    "ml_bounds_enforced": True,
-                    "target_range": f"${range_min:.2f}-${range_max:.2f}"
+                    "update_count": count
                 }
                 
                 # Send data with safe sending
